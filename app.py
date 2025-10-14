@@ -1,4 +1,3 @@
-# app.py — versão final e compatível com Streamlit Cloud
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -9,22 +8,24 @@ from io import StringIO
 # -----------------------------
 # Configurações Iniciais
 # -----------------------------
-ADMIN_CRED_JSON = st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]
+FIREBASE_CONFIG = st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]
 OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 
-# Inicializa Firebase
-try:
-    cred = credentials.Certificate(json.load(StringIO(ADMIN_CRED_JSON)))
-    firebase_admin.initialize_app(cred)
-except ValueError:
-    # Já inicializado
-    pass
+# Inicializa Firebase (somente uma vez)
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate(json.loads(FIREBASE_CONFIG))
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Erro ao inicializar Firebase: {e}")
 
+# Conecta ao Firestore
 db = firestore.client()
 
 # Inicializa OpenAI
 if OPENAI_KEY:
     openai.api_key = OPENAI_KEY
+
 
 # -----------------------------
 # Funções
@@ -110,3 +111,4 @@ else:
     if st.button("Logout"):
         del st.session_state['user_email']
         st.experimental_rerun()
+
