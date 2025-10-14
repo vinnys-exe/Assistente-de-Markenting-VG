@@ -13,21 +13,25 @@ OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 # Inicializa Firebase (somente uma vez)
 if not firebase_admin._apps:
     try:
-        # Converte o AttrDict em string JSON, depois em dict
-        cred_str = json.dumps(FIREBASE_CONFIG)
-        cred_dict = json.loads(cred_str)
-
-        cred = credentials.Certificate(cred_dict)
+        # ✅ Converte o AttrDict em um dict "normal" e depois em JSON
+        cred_json = json.loads(json.dumps(FIREBASE_CONFIG))
+        cred = credentials.Certificate(cred_json)
         firebase_admin.initialize_app(cred)
+        st.success("✅ Firebase inicializado com sucesso!")
     except Exception as e:
         st.error(f"Erro ao inicializar Firebase: {e}")
 
-# Conecta ao Firestore
-db = firestore.client()
+# Conecta ao Firestore (só se o Firebase foi inicializado)
+try:
+    db = firestore.client()
+except Exception as e:
+    st.error(f"Erro ao conectar ao Firestore: {e}")
+    db = None
 
 # Inicializa OpenAI
 if OPENAI_KEY:
     openai.api_key = OPENAI_KEY
+
 
 # -----------------------------
 # Funções
@@ -42,6 +46,7 @@ def registrar_usuario(email, senha):
     except Exception as e:
         st.error(f"Erro ao registrar: {e}")
 
+
 def login_usuario(email, senha):
     doc = db.collection("usuarios").document(email).get()
     if doc.exists:
@@ -50,6 +55,7 @@ def login_usuario(email, senha):
     else:
         st.error("Usuário não encontrado. Registre-se primeiro.")
         return False
+
 
 def gerar_anuncio(descricao_produto):
     prompt = f"Gere um anúncio profissional e persuasivo para o seguinte produto: {descricao_produto}"
@@ -63,6 +69,7 @@ def gerar_anuncio(descricao_produto):
     else:
         return f"[IA desligada] Seu anúncio: {descricao_produto}"
 
+
 def verificar_limite(email):
     doc = db.collection("usuarios").document(email).get()
     if doc.exists:
@@ -71,15 +78,20 @@ def verificar_limite(email):
         db.collection("usuarios").document(email).set({"anuncios_usados": 0})
         return 0
 
+
 def incrementar_anuncio(email):
     db.collection("usuarios").document(email).update({
         "anuncios_usados": firestore.Increment(1)
     })
 
+
 # -----------------------------
 # Interface Streamlit
 # -----------------------------
 st.title("🧠 AnuncIA — Gerador de Anúncios Profissionais")
+
+if db is None:
+    st.stop()  # para a execução se o Firebase falhou
 
 if 'user_email' not in st.session_state:
     st.subheader("Login / Registro")
