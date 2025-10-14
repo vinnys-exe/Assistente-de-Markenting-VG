@@ -13,9 +13,11 @@ OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 # Inicializa Firebase (somente uma vez)
 if not firebase_admin._apps:
     try:
-        # Converte o AttrDict do secrets em um dicionário normal
-        cred_json = json.loads(json.dumps(FIREBASE_CONFIG))
-        cred = credentials.Certificate(cred_json)
+        # Converte o AttrDict em string JSON, depois em dict
+        cred_str = json.dumps(FIREBASE_CONFIG)
+        cred_dict = json.loads(cred_str)
+
+        cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
     except Exception as e:
         st.error(f"Erro ao inicializar Firebase: {e}")
