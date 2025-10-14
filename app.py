@@ -1,28 +1,22 @@
-# app.py - AnuncIA (versão inicial)
+# app.py — versão sem Pyrebase (compatível com Streamlit Cloud)
 import streamlit as st
-import pyrebase4 as pyrebase
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 import openai
 
 # -----------------------------
-# Configurações iniciais
+# Configurações Iniciais
 # -----------------------------
-# Lê as chaves do Streamlit Secrets
-FIREBASE_CONFIG = st.secrets["FIREBASE_CONFIG"]
-ADMIN_CRED_JSON = st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]
+FIREBASE_CONFIG = st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]
 OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 
 # Inicializa Firebase
-firebase = pyrebase.initialize_app(eval(FIREBASE_CONFIG))
-auth = firebase.auth()
-
-# Inicializa Firebase Admin
-cred = credentials.Certificate(eval(ADMIN_CRED_JSON))
 try:
+    cred = credentials.Certificate(eval(FIREBASE_CONFIG))
     firebase_admin.initialize_app(cred)
 except ValueError:
     pass  # já inicializado
+
 db = firestore.client()
 
 # Inicializa OpenAI
@@ -30,28 +24,29 @@ if OPENAI_KEY:
     openai.api_key = OPENAI_KEY
 
 # -----------------------------
-# Funções principais
+# Funções
 # -----------------------------
-
 def registrar_usuario(email, senha):
     try:
-        auth.create_user_with_email_and_password(email, senha)
-        st.success("Usuário registrado! Verifique seu e-mail.")
+        user = auth.create_user(email=email, password=senha)
+        db.collection("usuarios").document(email).set({
+            "anuncios_usados": 0
+        })
+        st.success("Usuário registrado com sucesso!")
     except Exception as e:
         st.error(f"Erro ao registrar: {e}")
 
 def login_usuario(email, senha):
-    try:
-        user = auth.sign_in_with_email_and_password(email, senha)
-        st.session_state['user'] = user
-        st.success("Login realizado!")
+    doc = db.collection("usuarios").document(email).get()
+    if doc.exists:
+        st.session_state['user_email'] = email
         return True
-    except Exception as e:
-        st.error(f"Erro ao logar: {e}")
+    else:
+        st.error("Usuário não encontrado. Registre-se primeiro.")
         return False
 
 def gerar_anuncio(descricao_produto):
-    prompt = f"Gere um anúncio profissional para: {descricao_produto}"
+    prompt = f"Gere um anúncio profissional e persuasivo para o seguinte produto: {descricao_produto}"
     if OPENAI_KEY:
         response = openai.Completion.create(
             engine="text-davinci-003",
@@ -62,54 +57,53 @@ def gerar_anuncio(descricao_produto):
     else:
         return f"[IA desligada] Seu anúncio: {descricao_produto}"
 
-def verificar_limite(user_email):
-    doc_ref = db.collection("usuarios").document(user_email)
-    doc = doc_ref.get()
+def verificar_limite(email):
+    doc = db.collection("usuarios").document(email).get()
     if doc.exists:
-        dados = doc.to_dict()
-        return dados.get("anuncios_usados", 0)
+        return doc.to_dict().get("anuncios_usados", 0)
     else:
-        doc_ref.set({"anuncios_usados": 0})
+        db.collection("usuarios").document(email).set({"anuncios_usados": 0})
         return 0
 
-def incrementar_anuncio(user_email):
-    doc_ref = db.collection("usuarios").document(user_email)
-    doc_ref.update({"anuncios_usados": firestore.Increment(1)})
+def incrementar_anuncio(email):
+    db.collection("usuarios").document(email).update({
+        "anuncios_usados": firestore.Increment(1)
+    })
 
 # -----------------------------
 # Interface Streamlit
 # -----------------------------
-
 st.title("🧠 AnuncIA — Gerador de Anúncios Profissionais")
 
-if 'user' not in st.session_state:
+if 'user_email' not in st.session_state:
     st.subheader("Login / Registro")
     email = st.text_input("E-mail")
     senha = st.text_input("Senha", type="password")
+
     if st.button("Registrar"):
         registrar_usuario(email, senha)
+
     if st.button("Login"):
         if login_usuario(email, senha):
             st.experimental_rerun()
 else:
-    user_email = st.session_state['user']['email']
-    limite_usado = verificar_limite(user_email)
+    email = st.session_state['user_email']
+    limite_usado = verificar_limite(email)
     FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
 
-    st.subheader(f"Bem-vindo(a), {user_email}!")
+    st.subheader(f"Bem-vindo(a), {email}!")
     st.write(f"Anúncios usados: {limite_usado}/{FREE_LIMIT}")
 
     if limite_usado >= FREE_LIMIT:
         st.warning("Você atingiu o limite de anúncios grátis. Faça upgrade para continuar.")
     else:
-        descricao = st.text_area("Descrição do produto")
+        descricao = st.text_area("Descreva seu produto ou serviço:")
         if st.button("Gerar Anúncio"):
             anuncio = gerar_anuncio(descricao)
             st.success("Anúncio gerado com sucesso!")
             st.write(anuncio)
-            incrementar_anuncio(user_email)
+            incrementar_anuncio(email)
 
     if st.button("Logout"):
-        del st.session_state['user']
+        del st.session_state['user_email']
         st.experimental_rerun()
-
