@@ -1,6 +1,6 @@
 # app.py - AnuncIA (versão inicial)
 import streamlit as st
-import pyrebase
+import pyrebase4 as pyrebase
 import firebase_admin
 from firebase_admin import credentials, firestore
 import openai
@@ -112,3 +112,4 @@ else:
     if st.button("Logout"):
         del st.session_state['user']
         st.experimental_rerun()
+
