@@ -7,7 +7,7 @@ import json
 # -----------------------------
 # Configurações Iniciais
 # -----------------------------
-FIREBASE_CONFIG = dict(st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"])
+FIREBASE_CONFIG = st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]
 OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 
 # Inicializa Firebase
@@ -29,3 +29,4 @@ except Exception as e:
 # Inicializa OpenAI
 if OPENAI_KEY:
     openai.api_key = OPENAI_KEY
+
