@@ -12,8 +12,9 @@ OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 
 # Inicializa Firebase
 try:
-    cred = credentials.Certificate(eval(FIREBASE_CONFIG))
-    firebase_admin.initialize_app(cred)
+firebase = pyrebase.initialize_app(FIREBASE_CONFIG)
+cred = credentials.Certificate(ADMIN_CRED_JSON)
+
 except ValueError:
     pass  # já inicializado
 
@@ -107,3 +108,4 @@ else:
     if st.button("Logout"):
         del st.session_state['user_email']
         st.experimental_rerun()
+
