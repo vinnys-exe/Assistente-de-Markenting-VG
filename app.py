@@ -3,7 +3,6 @@ import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import openai
 import json
-from io import StringIO
 
 # -----------------------------
 # Configurações Iniciais
@@ -14,7 +13,9 @@ OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 # Inicializa Firebase (somente uma vez)
 if not firebase_admin._apps:
     try:
-        cred = credentials.Certificate(json.loads(FIREBASE_CONFIG))
+        # Converte o AttrDict do secrets em um dicionário normal
+        cred_json = json.loads(json.dumps(FIREBASE_CONFIG))
+        cred = credentials.Certificate(cred_json)
         firebase_admin.initialize_app(cred)
     except Exception as e:
         st.error(f"Erro ao inicializar Firebase: {e}")
@@ -25,7 +26,6 @@ db = firestore.client()
 # Inicializa OpenAI
 if OPENAI_KEY:
     openai.api_key = OPENAI_KEY
-
 
 # -----------------------------
 # Funções
@@ -111,4 +111,3 @@ else:
     if st.button("Logout"):
         del st.session_state['user_email']
         st.experimental_rerun()
-
