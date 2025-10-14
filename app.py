@@ -8,8 +8,8 @@ import json
 # CONFIGURAÇÕES INICIAIS
 # -----------------------------
 
-# 🔹 Corrige formato do segredo vindo do Streamlit
-FIREBASE_CONFIG = json.loads(json.dumps(st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]))
+# 🔹 Lê os segredos diretamente (sem json.dumps/json.loads)
+FIREBASE_CONFIG = dict(st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"])
 OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
 DEFAULT_FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
 
