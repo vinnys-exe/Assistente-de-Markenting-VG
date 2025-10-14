@@ -1,6 +1,7 @@
 streamlit
 firebase-admin
-pyrebase4
 openai
+git+https://github.com/nhorvath/Pyrebase4.git
+
 
 
