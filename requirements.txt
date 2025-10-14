@@ -1,6 +1,5 @@
 streamlit
-pyrebase4
 firebase-admin
-requests
+pyrebase4
 openai
 
