@@ -15,11 +15,12 @@ FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
 
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 MODEL_NAME = "gemini-2.5-flash" 
+# URL SIMULADA DE PAGAMENTO (SUBSTITUA PELO SEU LINK DO PAGSEGURO/STRIPE/CARRINHO.IO)
+PAYMENT_URL = "https://checkout.seusite.com.br/planos-anuncia-ia"
 
 # ----------------------------------------------------
 #               CONFIGURAÇÃO DO FIREBASE
 # ----------------------------------------------------
-# (O bloco de inicialização do Firebase é mantido inalterado)
 if 'db' not in st.session_state:
     st.session_state['db'] = None
     
@@ -49,11 +50,78 @@ if 'db' not in st.session_state:
         st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
         st.session_state["db"] = "SIMULATED"
 
+# ----------------------------------------------------
+#               FUNÇÕES DE UPGRADE E MONETIZAÇÃO
+# ----------------------------------------------------
+
+def display_upgrade_page():
+    """Exibe o painel de upgrade quando o limite grátis é atingido."""
+    st.markdown("## 🛑 Limite Gratuito Atingido!")
+    st.markdown("Parece que você já usou **todos os seus 3 anúncios grátis**.")
+    st.warning("Seu sucesso em gerar copies de alta conversão está travado. Não pare agora!")
+
+    st.markdown("---")
+    
+    st.markdown("### 🚀 Escolha Seu Plano e Libere o Potencial")
+    
+    # --- Cartões de Planos ---
+    col1, col2 = st.columns(2)
+    
+    # Plano Starter (Foco no preço)
+    with col1:
+        st.markdown(
+            f"""
+            <div style='border: 2px solid #2ecc71; padding: 15px; border-radius: 10px; text-align: center; background-color: #f0fff0;'>
+                <h3>Plano STARTER</h3>
+                <h1>R$ 19,90<sub style='font-size: 50%;'>/mês</sub></h1>
+                <p><strong>Perfeito para iniciantes e pequenos negócios.</strong></p>
+                <ul>
+                    <li>✅ 50 Anúncios/Mês</li>
+                    <li>✅ Acesso a Todos os Tons de Voz</li>
+                    <li>✅ Suporte por E-mail</li>
+                </ul>
+                <a href='{PAYMENT_URL}?plan=starter' target='_blank'>
+                    <button style='background-color: #2ecc71; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px;'>
+                        Contratar Starter
+                    </button>
+                </a>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
+    # Plano Pro (Foco no valor e Ilimitado)
+    with col2:
+        st.markdown(
+            f"""
+            <div style='border: 3px solid #3498db; padding: 15px; border-radius: 10px; text-align: center; background-color: #eaf6ff;'>
+                <h3>Plano PRO (Recomendado)</h3>
+                <h1>R$ 39,90<sub style='font-size: 50%;'>/mês</sub></h1>
+                <p><strong>Para agências e empreendedores de alto volume.</strong></p>
+                <ul>
+                    <li>🌟 ANÚNCIOS ILIMITADOS</li>
+                    <li>✅ Criação de Segmentos Avançada</li>
+                    <li>✅ Suporte VIP Prioritário</li>
+                </ul>
+                <a href='{PAYMENT_URL}?plan=pro' target='_blank'>
+                    <button style='background-color: #3498db; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px;'>
+                        Contratar PRO
+                    </button>
+                </a>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+    
+    st.markdown("---")
+    st.info(f"Ao contratar, use o e-mail **{st.session_state['logged_in_user_id']}** para ativar seu plano.")
+    st.markdown("Se você já pagou, recarregue a página em 5 minutos.")
+
 
 # ----------------------------------------------------
 #               FUNÇÃO DE CHAMADA À IA OTIMIZADA
 # ----------------------------------------------------
-
+# (Mantida inalterada da última iteração, exceto a URL base da API que não deve ter a chave no URL, pois a chave está no cabeçalho)
 def call_gemini_api(product_type: str, description: str, tone: str) -> Optional[Dict[str, str]]:
     """
     Chama a API do Gemini com um prompt estruturado para gerar o anúncio.
@@ -103,11 +171,16 @@ def call_gemini_api(product_type: str, description: str, tone: str) -> Optional[
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "config": generation_config
     }
-
-    headers = {'Content-Type': 'application/json'}
+    
+    # Passando a chave no header de autorização (Método preferido)
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': GEMINI_API_KEY 
+    }
     
     try:
-        response = requests.post(f"{API_URL}?key={GEMINI_API_KEY}", headers=headers, data=json.dumps(payload))
+        # A URL não precisa mais do ?key={GEMINI_API_KEY}
+        response = requests.post(API_URL, headers=headers, data=json.dumps(payload))
         response.raise_for_status() 
         
         result = response.json()
@@ -131,7 +204,6 @@ def call_gemini_api(product_type: str, description: str, tone: str) -> Optional[
 # ----------------------------------------------------
 # FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
 # ----------------------------------------------------
-# (Mantidas inalteradas)
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca)."""
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
@@ -201,16 +273,21 @@ else:
     user_id = st.session_state['logged_in_user_id']
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
+    user_plan = user_data.get("plan", "free")
 
     st.markdown("---")
-    st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+    # Mostrar status de forma dinâmica
+    if user_plan == "free":
+        st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+    else:
+        st.markdown(f"**Status:** Seu plano **{user_plan.upper()}** está ativo! Uso Ilimitado.")
     st.markdown("---")
 
 
-    if ads_used >= FREE_LIMIT:
-        st.warning("🚫 **Limite gratuito atingido!** Faça upgrade para liberar o uso ilimitado.")
-        # Link de pagamento agora vai para a nova seção de monetização
-        st.markdown(f"**[🚀 Clique aqui para ver nossos planos e fazer upgrade!](LINK_PARA_PAGAMENTO)**")
+    # MUDANÇA PRINCIPAL: Lógica de Exibição
+    # Se o plano for "free" E o uso for maior ou igual ao limite, mostra a página de upgrade
+    if user_plan == "free" and ads_used >= FREE_LIMIT:
+        display_upgrade_page() # Chama a nova função de vendas
     
     else:
         # --- Formulário de Geração de Anúncios ---
@@ -223,7 +300,6 @@ else:
                 product_type = st.selectbox("Tipo de produto", 
                                             ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"])
             with col_b:
-                # NOVO CAMPO: Tom de Voz
                 tone = st.selectbox("Tom de Voz da Copy", 
                                     ["Persuasivo/Vendedor", "Divertido/Casual", "Formal/Técnico", "Agressivo/Urgente"])
 
@@ -237,19 +313,20 @@ else:
             else:
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
                     
-                    # Chama a função real da API, passando o tom
                     ad_content = call_gemini_api(product_type, description, tone)
 
                     if ad_content:
-                        # 1. Incrementa a contagem no Firebase
-                        new_count = increment_ads_count(user_id)
+                        # 1. Incrementa a contagem no Firebase (APENAS se for plano free)
+                        if user_plan == "free":
+                            new_count = increment_ads_count(user_id)
+                        else:
+                            new_count = ads_used # Não incrementa se for pago
                         
                         # 2. Exibição do resultado REAL da IA
-                        st.success(f"✅ Anúncio Gerado com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
+                        st.success(f"✅ Anúncio Gerado com Sucesso!")
                         st.markdown("---")
                         
                         # Exibição Otimizada (UI/UX)
-                        
                         st.markdown(f"## 💥 {ad_content.get('titulo_gancho', 'Título Gerado')}")
                         st.caption(f"Tom de voz aplicado: **{tone}**")
                         st.markdown("---")
