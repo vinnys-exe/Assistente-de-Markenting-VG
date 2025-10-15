@@ -11,10 +11,10 @@ from typing import Dict, Any, Union
 import re 
 import base64
 
-# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO (V4.0) ---
+# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO (V4.1 - CORREÇÃO RERUN) ---
 st.set_page_config(page_title="✨ AnuncIA - Gerador de Anúncios", layout="centered")
 
-# --- CSS PROFISSIONAL V4.0 ---
+# --- CSS PROFISSIONAL V4.1 ---
 st.markdown("""
 <style>
 /* 1. CONFIGURAÇÃO BASE GERAL */
@@ -197,7 +197,7 @@ def clean_email_to_doc_id(email: str) -> str:
     
     # Substitui caracteres especiais restantes por '_' (para Document ID)
     user_doc_id = re.sub(r'[^\w@\.\-]', '_', clean_email)
-    return user_doc_id
+    return clean_email
 
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
@@ -207,7 +207,7 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
         logged_email_clean = clean_email_to_doc_id(st.session_state['logged_in_user_email'])
         
         # O PONTO CRÍTICO: Compara o e-mail logado LIMPO com o DEVELOPER_EMAIL LIMPO
-        if logged_email_clean == DEVELOPER_EMAIL_CLEAN:
+        if logged_email_clean == clean_email_to_doc_id(DEVELOPER_EMAIL):
             # Se o e-mail for o Admin, força o plano PREMIUM (ilimitado)
             return {"ads_generated": 0, "plan_tier": "premium"} 
     
@@ -247,7 +247,7 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     return new_count
 
 # ----------------------------------------------------
-#           FUNÇÕES DE AUTENTICAÇÃO (IMUTÁVEL)
+#           FUNÇÕES DE AUTENTICAÇÃO (CORRIGIDAS)
 # ----------------------------------------------------
 
 def handle_login(email: str, password: str):
@@ -264,13 +264,12 @@ def handle_login(email: str, password: str):
 
         user = st.session_state['auth'].get_user_by_email(email, app=app_instance) 
         
-        # Simula o login bem-sucedido
         st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
         
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
         st.success(f"Bem-vindo(a), {email}!")
-        st.experimental_rerun()
+        st.rerun() # <-- CORREÇÃO AQUI
         
     except firebase_admin._auth_utils.UserNotFoundError:
         st.error("Erro: Usuário não encontrado. Verifique seu e-mail e senha.")
@@ -309,7 +308,7 @@ def handle_register(email: str, password: str, username: str, phone: str):
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
         st.success(f"Conta criada com sucesso! Bem-vindo(a), {username}.")
-        st.experimental_rerun()
+        st.rerun() # <-- CORREÇÃO AQUI
 
     except firebase_admin._auth_utils.EmailAlreadyExistsError:
         st.error("Erro: Este e-mail já está em uso. Tente fazer o login.")
@@ -320,7 +319,7 @@ def handle_logout():
     """Desloga o usuário."""
     st.session_state['logged_in_user_email'] = None
     st.session_state['logged_in_user_id'] = None
-    st.experimental_rerun()
+    st.rerun() # <-- CORREÇÃO AQUI
 
 # ----------------------------------------------------
 #           FUNÇÕES DE CHAMADA DA API (IMUTÁVEL)
@@ -406,7 +405,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
     return {"error": "Não foi possível conectar após várias tentativas."}
 
 # ----------------------------------------------------
-#           FUNÇÕES DE EXIBIÇÃO DA UI (ATUALIZADA)
+#           FUNÇÕES DE EXIBIÇÃO DA UI (IMUTÁVEL)
 # ----------------------------------------------------
 
 def display_upgrade_page(user_id: str):
@@ -585,7 +584,7 @@ else:
     col_status, col_upgrade_link = st.columns([2, 1])
 
     with col_status:
-        is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == DEVELOPER_EMAIL_CLEAN
+        is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL)
         
         if is_dev:
             # PONTO DE VERIFICAÇÃO DE ADMIN (CORRIGIDO)
