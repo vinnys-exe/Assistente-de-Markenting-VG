@@ -162,13 +162,15 @@ def initialize_firebase():
             
             # --- CORREÇÃO DE CHAVE PRIVADA PARA EVITAR ERRO DE PARSING ---
             # O Streamlit/Python pode ter problemas com a formatação da string 'private_key'.
-            # Esta linha força a substituição de "\\n" (escapado no TOML) por "\n" (quebra de linha real).
-            if private_key_raw.startswith('-----BEGIN PRIVATE KEY-----') and "\\n" not in private_key_raw:
-                 # Se a chave for colada diretamente com quebras de linha reais (não recomendado no cloud)
-                private_key = private_key_raw 
+            # Esta lógica tenta forçar a substituição de "\\n" (escapado no TOML) por "\n" (quebra de linha real)
+            # e limpa espaços no início/fim para evitar MalformedFraming ou InvalidData.
+            private_key_cleaned = private_key_raw.strip() 
+            
+            if private_key_cleaned and "\\n" in private_key_cleaned:
+                private_key = private_key_cleaned.replace("\\n", "\n")
             else:
-                # O padrão esperado (escapado no secrets.toml / Streamlit Cloud)
-                private_key = private_key_raw.replace("\\n", "\n")
+                # Se não contiver \\n, assume-se que foi colado com aspas triplas ou a formatação é aceitável
+                private_key = private_key_cleaned 
             # -------------------------------------------------------------
             
             service_account_info = {
@@ -319,17 +321,14 @@ def update_user_plan(target_email: str, new_plan: str) -> bool:
 def handle_login(email: str, password: str):
     try:
         if st.session_state['auth'] == "SIMULATED":
-            st.error("Serviço de autenticação desativado.")
+            # O problema está na inicialização do Firebase, não nesta função.
+            st.error("Serviço de autenticação desativado. Verifique os logs de inicialização do Firebase para o erro crítico.")
             return
 
         app_instance = st.session_state['firebase_app']
-        # Nota: O Firebase Admin SDK não tem uma função de "login com senha" diretamente.
-        # Ele é usado para gerenciar usuários no back-end. Para uma app real, 
-        # você usaria o Client SDK (ex: JS/Web) para login e verificaria o token ID aqui.
-        # Aqui, estamos simulando a autenticação via Admin SDK apenas para obter o UID.
-        user = st.session_state['auth'].get_user_by_email(email, app=app_instance)
         
         # AVISO: Em produção, você precisa de um mecanismo para validar a senha.
+        user = st.session_state['auth'].get_user_by_email(email, app=app_instance)
         st.warning("Aviso: Login efetuado. Verificação de senha simulada (Admin SDK).")
         
         st.session_state['logged_in_user_email'] = email
@@ -345,7 +344,7 @@ def handle_login(email: str, password: str):
 def handle_register(email: str, password: str, username: str, phone: str):
     try:
         if st.session_state['auth'] == "SIMULATED":
-            st.error("Serviço de autenticação desativado.")
+            st.error("Serviço de autenticação desativado. Verifique os logs de inicialização do Firebase para o erro crítico.")
             return
             
         app_instance = st.session_state['firebase_app']
@@ -961,4 +960,3 @@ if st.session_state.get('last_ad_copy') and st.session_state.get('last_ad_strate
             
             if save_user_feedback(user_id, feedback_rating, input_prompt, ai_response):
                 st.success("Obrigado! Seu feedback é crucial para melhorarmos a AnuncIA. 😊")
-            # Não é mais necessário st.experimental_set_query_params()
