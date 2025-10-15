@@ -1,30 +1,71 @@
 import streamlit as st
 import os
 import time
-import re
-import requests 
-import json     
-import firebase_admin 
-from firebase_admin import credentials, initialize_app, firestore 
+import requests
+import json
+import firebase_admin
+from firebase_admin import credentials, initialize_app, firestore
 from google.cloud.firestore import Client
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Union
+import re 
+import base64
 
-# --- Configurações & Chaves (Puxadas do secrets.toml) ---
-GEMINI_API_KEY = st.secrets.get("OPENAI_API_KEY", None) 
+# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO ---
+st.set_page_config(page_title="✨ AnuncIA - Gerador de Anúncios", layout="centered")
+
+# Injeção de CSS para layout e estética
+st.markdown("""
+<style>
+/* Remove padding top e laterais do Streamlit */
+.block-container {
+    padding-top: 2rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-bottom: 2rem;
+}
+
+/* Customiza cor de botões e widgets principais */
+div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
+    border-radius: 10px;
+    border: 1px solid #52b2ff; 
+}
+
+/* Cor de fundo para o sidebar */
+[data-testid="stSidebar"] {
+    background-color: #f7f7f7;
+    border-right: 1px solid #eee;
+}
+
+/* Destaque para as caixas de resultado (Shadow) */
+.stCode, .stTextarea > div, [data-testid="stExpander"] {
+    border-radius: 12px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+    background-color: #ffffff;
+    padding: 15px;
+}
+.stCode:hover, .stTextarea:hover {
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease-in-out;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
+OPENAI_KEY = st.secrets.get("OPENAI_API_KEY", "")
 FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
-
-API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-MODEL_NAME = "gemini-2.5-flash" 
-# URL SIMULADA DE PAGAMENTO (SUBSTITUA PELO SEU LINK DO PAGSEGURO/STRIPE/CARRINHO.IO)
-PAYMENT_URL = "https://checkout.seusite.com.br/planos-anuncia-ia"
+DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "")
 
 # ----------------------------------------------------
 #               CONFIGURAÇÃO DO FIREBASE
 # ----------------------------------------------------
+
+# Verifica se o Firebase já foi inicializado na sessão
 if 'db' not in st.session_state:
     st.session_state['db'] = None
     
     try:
+        # 1. Obter as credenciais do secrets.toml
         firebase_config = st.secrets.get("firebase", None)
         
         if not firebase_config:
@@ -37,210 +78,56 @@ if 'db' not in st.session_state:
             }
             service_account_info["private_key"] = private_key
 
+            # 2. Inicializar o Firebase Admin SDK (só se não estiver inicializado)
             if not firebase_admin._apps: 
                 cred = credentials.Certificate(service_account_info)
                 initialize_app(cred, name="anuncia_app")
             
+            # 3. Conectar ao Firestore
             db_client = firestore.client(app=firebase_admin.get_app("anuncia_app"))
             st.session_state["db"] = db_client 
-            st.success("✅ Conexão Firebase/Firestore estabelecida.")
-
+            # st.success("✅ Conexão Firebase/Firestore estabelecida.") # Removido para limpar a tela
+            
     except Exception as e:
-        st.error(f"❌ Erro ao inicializar Firebase: {e}")
+        # st.error(f"❌ Erro ao inicializar Firebase: {e}") # Comentei para evitar poluir o app
         st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
-        st.session_state["db"] = "SIMULATED"
-
+        st.session_state["db"] = "SIMULATED" 
+        
 # ----------------------------------------------------
-#               FUNÇÕES DE UPGRADE E MONETIZAÇÃO
-# ----------------------------------------------------
-
-def display_upgrade_page():
-    """Exibe o painel de upgrade quando o limite grátis é atingido."""
-    st.markdown("## 🛑 Limite Gratuito Atingido!")
-    st.markdown("Parece que você já usou **todos os seus 3 anúncios grátis**.")
-    st.warning("Seu sucesso em gerar copies de alta conversão está travado. Não pare agora!")
-
-    st.markdown("---")
-    
-    st.markdown("### 🚀 Escolha Seu Plano e Libere o Potencial")
-    
-    # --- Cartões de Planos ---
-    col1, col2 = st.columns(2)
-    
-    # Plano Starter (Foco no preço)
-    with col1:
-        st.markdown(
-            f"""
-            <div style='border: 2px solid #2ecc71; padding: 15px; border-radius: 10px; text-align: center; background-color: #f0fff0;'>
-                <h3>Plano STARTER</h3>
-                <h1>R$ 19,90<sub style='font-size: 50%;'>/mês</sub></h1>
-                <p><strong>Perfeito para iniciantes e pequenos negócios.</strong></p>
-                <ul>
-                    <li>✅ 50 Anúncios/Mês</li>
-                    <li>✅ Acesso a Todos os Tons de Voz</li>
-                    <li>❌ Geração de Roteiros de Vídeo</li>
-                </ul>
-                <a href='{PAYMENT_URL}?plan=starter' target='_blank'>
-                    <button style='background-color: #2ecc71; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px;'>
-                        Contratar Starter
-                    </button>
-                </a>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
-
-    # Plano Pro (Foco no valor e Ilimitado)
-    with col2:
-        st.markdown(
-            f"""
-            <div style='border: 3px solid #3498db; padding: 15px; border-radius: 10px; text-align: center; background-color: #eaf6ff;'>
-                <h3>Plano PRO (Recomendado)</h3>
-                <h1>R$ 39,90<sub style='font-size: 50%;'>/mês</sub></h1>
-                <p><strong>Para agências e empreendedores de alto volume.</strong></p>
-                <ul>
-                    <li>🌟 ANÚNCIOS ILIMITADOS</li>
-                    <li>✅ GERAÇÃO DE ROTEIROS DE VÍDEO</li>
-                    <li>✅ Suporte VIP Prioritário</li>
-                </ul>
-                <a href='{PAYMENT_URL}?plan=pro' target='_blank'>
-                    <button style='background-color: #3498db; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px;'>
-                        Contratar PRO
-                    </button>
-                </a>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
-    
-    st.markdown("---")
-    st.info(f"Ao contratar, use o e-mail **{st.session_state['logged_in_user_id']}** para ativar seu plano.")
-    st.markdown("Se você já pagou, recarregue a página em 5 minutos.")
-
-
-# ----------------------------------------------------
-#               FUNÇÃO DE CHAMADA À IA OTIMIZADA
+#       FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
 # ----------------------------------------------------
 
-def call_gemini_api(product_type: str, description: str, tone: str, generate_video: bool, user_plan: str) -> Optional[Dict[str, str]]:
-    """
-    Chama a API do Gemini. Agora suporta a geração condicional de conteúdo de vídeo.
-    """
-    if not GEMINI_API_KEY:
-        st.error("Chave da API não configurada. Verifique o secrets.toml.")
-        return None
-    
-    # Define as chaves JSON obrigatórias
-    required_keys = ["titulo_gancho", "copy_aida", "call_to_action", "segmentacao_e_ideias"]
-    
-    # Adiciona chaves de vídeo se for solicitado E o plano for PRO
-    if generate_video:
-        required_keys.extend(["gancho_video", "roteiro_basico"])
-        video_instruction = (
-            "Além da copy tradicional, gere também um 'gancho_video' de 5 segundos para TikTok/Reels "
-            "e um 'roteiro_basico' de 3 etapas com a cena, a fala e a música/efeito."
-        )
-        
-        # O prompt de vídeo é mais exigente, então só permitimos no PRO
-        if user_plan != "pro":
-            st.warning("O recurso de Geração de Roteiro de Vídeo é exclusivo do Plano PRO. A IA gerará apenas a copy tradicional.")
-            generate_video = False # Desativa a geração de vídeo para o prompt
-
-    else:
-        video_instruction = ""
-    
-    
-    # SYSTEM PROMPT base
-    system_prompt = (
-        "Você é o Copywriter-Chefe da agência 'AnuncIA'. Sua missão é gerar um anúncio que converte como fogo. "
-        "A copy deve ser estruturada seguindo o framework AIDA (Atenção, Interesse, Desejo, Ação), "
-        "com uso de gatilhos mentais de Escassez e Prova Social. "
-        f"O idioma de saída DEVE ser Português Brasileiro (PT-BR), com emojis e linguagem persuasiva. {video_instruction} "
-        "Sua resposta DEVE ser um objeto JSON válido, contendo obrigatoriamente as seguintes chaves: "
-        f"{required_keys}. Não inclua qualquer outro texto antes ou depois do JSON."
-    )
-    
-    # Prompt do Usuário
-    user_prompt = (
-        f"Gere um anúncio persuasivo de alta conversão. "
-        f"Tipo de Produto: {product_type}. "
-        f"Descrição Detalhada e Foco: '{description}'. "
-        f"O TOM DE VOZ OBRIGATÓRIO deve ser: {tone}. "
-        f"A copy_aida deve ter no máximo 1500 caracteres."
-    )
-
-    # Configuração de Geração (Schema de saída JSON dinâmico)
-    schema_properties = {
-        "titulo_gancho": {"type": "STRING", "description": "Um título curto e agressivo (gancho) para capturar a atenção (max 80 caracteres)."},
-        "copy_aida": {"type": "STRING", "description": "O corpo do texto principal do anúncio, seguindo AIDA (Atenção, Interesse, Desejo, Ação)."},
-        "call_to_action": {"type": "STRING", "description": "Uma chamada para ação direta, com senso de urgência (ex: 'Últimas 24h! Garanta sua vaga')."},
-        "segmentacao_e_ideias": {"type": "STRING", "description": "Sugestões de público-alvo (Facebook Ads) e uma breve ideia de imagem/vídeo para o anúncio."}
-    }
-
-    if generate_video:
-        schema_properties["gancho_video"] = {"type": "STRING", "description": "Frase de 5 segundos (hook) ultra-curta para prender a atenção no vídeo."}
-        schema_properties["roteiro_basico"] = {"type": "STRING", "description": "Roteiro de vídeo estruturado em 3 etapas (Cena, Fala, Efeito/CTA)."}
-
-    generation_config = {
-        "responseMimeType": "application/json",
-        "responseSchema": {
-            "type": "OBJECT",
-            "properties": schema_properties,
-            "required": required_keys
-        }
-    }
-
-    payload = {
-        "contents": [{"parts": [{"text": user_prompt}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "config": generation_config
-    }
-    
-    headers = {
-        'Content-Type': 'application/json',
-        'x-api-key': GEMINI_API_KEY 
-    }
-    
-    try:
-        response = requests.post(API_URL, headers=headers, data=json.dumps(payload))
-        response.raise_for_status() 
-        
-        result = response.json()
-        
-        json_string = result['candidates'][0]['content']['parts'][0]['text']
-        
-        return json.loads(json_string)
-        
-    except requests.exceptions.HTTPError as e:
-        st.error(f"Erro HTTP: Verifique se sua chave da API é válida e se o modelo está acessível.")
-        st.info(f"Detalhes da Resposta: {response.text[:200]}...")
-    except (KeyError, json.JSONDecodeError) as e:
-        st.error(f"Erro ao processar a resposta da IA. O formato JSON esperado pode ter sido violado.")
-        st.code(f"Resposta bruta: {json_string}", language='json')
-    except Exception as e:
-        st.error(f"Erro inesperado na chamada da API: {e}")
-        
-    return None
-
-
-# ----------------------------------------------------
-# FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
-# ----------------------------------------------------
 def get_user_data(user_id: str) -> Dict[str, Any]:
-    """Busca os dados do usuário no Firestore (ou simula a busca)."""
+    """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
+    
+    # 1. VERIFICAÇÃO DE DESENVOLVEDOR (WHITELIST)
+    dev_email_clean = DEVELOPER_EMAIL.lower()
+    
+    # O user_id é o e-mail limpo e formatado como document ID
+    if user_id.lower() == re.sub(r'[^\w\-@\.]', '_', dev_email_clean):
+        # Retorna o plano 'pro' imediatamente, ignorando o Firebase
+        return {"ads_generated": 0, "plan": "pro"} 
+    
+    # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
         user_ref = st.session_state["db"].collection("users").document(user_id)
         doc = user_ref.get()
         if doc.exists:
             return doc.to_dict()
+    
+    # 3. MODO SIMULADO (Fallback)
     return st.session_state.get(f"user_{user_id}", {"ads_generated": 0, "plan": "free"})
 
-def increment_ads_count(user_id: str):
-    """Incrementa a contagem de anúncios (Firebase ou Simulado)."""
+def increment_ads_count(user_id: str, current_plan: str) -> int:
+    """Incrementa a contagem de anúncios SOMENTE se o plano for 'free'."""
+    if current_plan != "free":
+        return 0 
+        
     user_data = get_user_data(user_id)
     new_count = user_data.get("ads_generated", 0) + 1
     
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+        # Modo Firebase
         user_ref = st.session_state["db"].collection("users").document(user_id)
         user_ref.set({
             "ads_generated": new_count,
@@ -248,63 +135,199 @@ def increment_ads_count(user_id: str):
             "plan": user_data.get("plan", "free")
         }, merge=True)
     else:
+        # Modo Simulado
         user_data["ads_generated"] = new_count
-        st.session_state[f"user_{user_id}"] = user_data 
-
+        st.session_state[f"user_{user_id}"] = user_data
+        
     return new_count
 
+# ----------------------------------------------------
+#             FUNÇÕES DE CHAMADA DA API (GEMINI/OPENAI)
+# ----------------------------------------------------
+
+def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_user: bool, needs_video: bool) -> Union[Dict, str]:
+    """Chama a API (simulando Gemini/OpenAI) para gerar copy em formato JSON."""
+    
+    api_key = OPENAI_KEY
+    if not api_key:
+        return {"error": "Chave de API (OPENAI_API_KEY) não configurada."}
+
+    # 1. CONSTRUÇÃO DO PROMPT E SCHEMA (Dinâmico para o Plano PRO)
+    
+    # Instrução base (AIDA + Tom)
+    system_instruction = f"""
+    Você é um Copywriter de elite, especializado em Marketing Digital e Vendas Diretas. 
+    Sua missão é gerar um anúncio altamente persuasivo e focado em conversão.
+    
+    Instruções de Tom: O tom de voz deve ser {tone}.
+    Instruções de Estrutura: Use o Framework AIDA (Atenção, Interesse, Desejo, Ação). 
+    A copy deve ser concisa, focar no benefício do cliente e incluir gatilhos de escassez/urgência/prova social.
+    
+    O produto é um {product_type}.
+    """
+    
+    # Instruções e Schema para Saída (JSON)
+    output_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "titulo_gancho": {"type": "STRING", "description": "Um título chocante e que gere Atenção imediata, com no máximo 10 palavras."},
+            "copy_aida": {"type": "STRING", "description": "O texto principal (body copy) persuasivo, seguindo a estrutura AIDA (Atenção, Interesse, Desejo e Ação)."},
+            "chamada_para_acao": {"type": "STRING", "description": "Uma Chamada para Ação (CTA) clara e urgente."},
+            "segmentacao_e_ideias": {"type": "STRING", "description": "Sugestões de 3 personas ou grupos de interesse para segmentação do anúncio."}
+        },
+        "propertyOrdering": ["titulo_gancho", "copy_aida", "chamada_para_acao", "segmentacao_e_ideias"]
+    }
+
+    # ADICIONA RECURSOS PRO (Roteiro de Vídeo)
+    if is_pro_user and needs_video:
+        system_instruction += "\n\n⚠️ INSTRUÇÃO PRO: Além da copy, você DEVE gerar um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed."
+        output_schema['properties']['gancho_video'] = {"type": "STRING", "description": "Um HOOK (gancho) de 3 segundos que interrompe a rolagem do feed (ex: 'Não use isso para perder peso!')."}
+        output_schema['properties']['roteiro_basico'] = {"type": "STRING", "description": "Um roteiro conciso de 30 segundos em 3 etapas (Problema, Solução/Benefício, CTA)."}
+        output_schema['propertyOrdering'].extend(['gancho_video', 'roteiro_basico'])
+
+
+    # 2. CONSTRUÇÃO DO PAYLOAD
+    payload = {
+        "contents": [{"parts": [{"text": user_description}]}],
+        "systemInstruction": {"parts": [{"text": system_instruction}]},
+        "config": {
+            "responseMimeType": "application/json",
+            "responseSchema": output_schema,
+            "temperature": 0.7 
+        }
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={api_key}"
+    
+    # 3. CHAMADA HTTP (COM BACKOFF PARA RESILIÊNCIA)
+    for i in range(3): # Tenta até 3 vezes
+        try:
+            response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
+            response.raise_for_status() # Lança exceção para status 4xx/5xx
+            
+            result = response.json()
+            
+            # Tenta parsear o JSON de saída do modelo
+            json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
+            
+            return json.loads(json_text)
+        
+        except requests.exceptions.RequestException as e:
+            if i < 2:
+                time.sleep(2 ** i) # Espera exponencial
+                continue
+            return {"error": f"Erro de conexão com a API: {e}"}
+        except json.JSONDecodeError:
+            # Se a IA não retornar JSON válido, pede para tentar de novo ou retorna erro
+            return {"error": "A IA não conseguiu retornar um JSON válido. Por favor, tente novamente."}
+        except Exception as e:
+            return {"error": f"Erro inesperado na chamada da API: {e}"}
+            
+    return {"error": "Não foi possível conectar após várias tentativas."}
 
 # ----------------------------------------------------
-#           IMPLEMENTAÇÃO DE LOGIN SIMPLIFICADO
+#              FUNÇÕES DE EXIBIÇÃO DA UI
+# ----------------------------------------------------
+
+def display_upgrade_page(user_id: str):
+    """Exibe a página de vendas/upgrade quando o limite é atingido."""
+    st.markdown("---")
+    st.subheader("🚀 Destrave o Poder Total da AnuncIA!")
+    st.warning("🚨 **Limite Gratuito Atingido!** Você utilizou 3 de 3 anúncios grátis.")
+    
+    st.markdown("Chegou a hora de levar sua copy e seus resultados para o próximo nível.")
+    
+    col1, col2 = st.columns(2)
+    
+    # Plano Grátis (Comparação)
+    with col1:
+        st.markdown(
+            f"""
+            <div style="background-color: #f0f0f0; padding: 20px; border-radius: 12px; height: 100%; border: 1px solid #ddd;">
+                <h4 style="color: #666;">Plano Gratuito</h4>
+                <p><strong>R$ 0,00</strong></p>
+                <ul style="list-style-type: '❌ '; padding-left: 20px;">
+                    <li>Apenas {FREE_LIMIT} Anúncios/Sessão</li>
+                    <li>Sem Roteiros de Vídeo (Reels/TikTok)</li>
+                    <li>Uso Básico</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True
+        )
+    
+    # Plano PRO (A Venda)
+    with col2:
+        st.markdown(
+            f"""
+            <div style="background-color: #e0f2ff; padding: 20px; border-radius: 12px; height: 100%; border: 2px solid #52b2ff;">
+                <h4 style="color: #52b2ff;">Plano PRO 💎</h4>
+                <p><strong>R$ 19,90/mês</strong></p>
+                <ul style="list-style-type: '✅ '; padding-left: 20px;">
+                    <li>Anúncios Ilimitados (Sem Restrições)</li>
+                    <li>Geração de **Roteiros de Vídeo** (PRO Feature)</li>
+                    <li>Todos os Tons de Voz</li>
+                    <li>Suporte Prioritário</li>
+                </ul>
+                <div style="text-align: center; margin-top: 15px;">
+                    <a href="LINK_PARA_PAGAMENTO" target="_blank" style="text-decoration: none;">
+                        <button style="background-color: #52b2ff; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 16px; cursor: pointer;">
+                            ATIVAR AGORA →
+                        </button>
+                    </a>
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+    
+    st.markdown(f"---")
+    st.info(f"Seu e-mail de acesso é: **{user_id}**")
+
+
+def display_result_box(title: str, content: str, key: str):
+    """Exibe o conteúdo em um text_area com botão de cópia nativo."""
+    st.markdown(f"**{title}**")
+    st.text_area(
+        label=title,
+        value=content,
+        height=None,
+        key=key,
+        label_visibility="collapsed"
+    )
+
+# ----------------------------------------------------
+#               IMPLEMENTAÇÃO DE LOGIN SIMPLIFICADO
 # ----------------------------------------------------
 
 if 'logged_in_user_id' not in st.session_state:
     st.session_state['logged_in_user_id'] = None
 
-st.set_page_config(page_title="AnuncIA - Gerador de Anúncios", layout="centered")
 st.title("✨ AnuncIA — O Gerador de Anúncios Inteligente")
 
+# Área de Login/Identificação na Sidebar
 with st.sidebar:
-    st.title("🔒 Login/Acesso")
+    st.markdown("## 🔒 Login/Acesso")
     email_input = st.text_input("Seu E-mail (Para controle de uso)", 
                                 placeholder="seu@email.com")
     
-    # Adicionar um botão simulado de upgrade/downgrade para debug
-    if st.session_state.get('logged_in_user_id'):
-        user_id = st.session_state['logged_in_user_id']
-        current_plan = get_user_data(user_id).get('plan', 'free')
-        
-        st.markdown("---")
-        st.caption("Ações de Debug (Plano)")
-        
-        new_plan = st.selectbox("Simular Plano", ["free", "starter", "pro"], index=["free", "starter", "pro"].index(current_plan))
-
-        if st.button(f"Atualizar Plano para {new_plan.upper()}"):
-            if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-                st.session_state["db"].collection("users").document(user_id).set({"plan": new_plan}, merge=True)
-                st.session_state[f"user_{user_id}"] = get_user_data(user_id) # Atualiza o estado local
-                st.rerun()
-            else:
-                st.warning("Ação de simulação de plano indisponível no modo OFFLINE/SIMULAÇÃO.")
-
-
-    if st.button("Acessar / Simular Login"):
+    if st.button("Acessar / Simular Login", use_container_width=True):
         if "@" in email_input:
+            # 1. Aplica a lógica anti-abuso de e-mail alias (ignora '+alias')
             clean_email = email_input
             if "+" in email_input:
                 local_part, domain = email_input.split("@")
                 local_part = local_part.split("+")[0]
                 clean_email = f"{local_part}@{domain}"
             
+            # 2. Cria um ID limpo para usar como Document ID no Firestore
             user_doc_id = re.sub(r'[^\w\-@\.]', '_', clean_email)
             
             st.session_state['logged_in_user_id'] = user_doc_id
-            st.success(f"Logado como: {clean_email}")
+            st.success(f"Acesso Liberado: {clean_email}")
         else:
             st.error("Por favor, insira um e-mail válido.")
 
 # ----------------------------------------------------
-#                   INTERFACE PRINCIPAL
+#                  INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
 if not st.session_state['logged_in_user_id']:
@@ -315,115 +338,126 @@ else:
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
     user_plan = user_data.get("plan", "free")
-
-    st.markdown("---")
-    # Mostrar status de forma dinâmica
-    if user_plan == "free":
-        st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
-    else:
-        st.markdown(f"**Status:** Seu plano **{user_plan.upper()}** está ativo! Uso Ilimitado e Recursos PRO.")
-    st.markdown("---")
-
-
-    # Lógica de Exibição
-    if user_plan == "free" and ads_used >= FREE_LIMIT:
-        display_upgrade_page() # Exibe a nova função de vendas
     
+    is_pro_user = (user_plan == "pro")
+
+    st.markdown("---")
+    if is_pro_user:
+        status_text = "⭐ Acesso de Desenvolvedor (PRO Ilimitado)" if user_id.lower() == re.sub(r'[^\w\-@\.]', '_', DEVELOPER_EMAIL.lower()) else "💎 Plano PRO (Uso Ilimitado)"
+        st.markdown(f"**Status:** {status_text}")
+    else:
+        st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+    st.markdown("---")
+
+
+    if not is_pro_user and ads_used >= FREE_LIMIT:
+        # Usuário Grátis atingiu o limite
+        display_upgrade_page(user_id)
+        
     else:
         # --- Formulário de Geração de Anúncios ---
         with st.form("input_form"):
             st.subheader("🛠️ Crie Seu Anúncio Profissional")
             
-            col_a, col_b = st.columns(2)
+            col_tone, col_type = st.columns(2)
             
-            with col_a:
-                product_type = st.selectbox("Tipo de produto", 
-                                            ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"])
-            with col_b:
-                tone = st.selectbox("Tom de Voz da Copy", 
-                                    ["Persuasivo/Vendedor", "Divertido/Casual", "Formal/Técnico", "Agressivo/Urgente"])
+            with col_type:
+                product_type = st.selectbox(
+                    "Qual é o tipo de produto?", 
+                    ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"]
+                )
             
-            # NOVO CAMPO: Geração de Vídeo (Recurso PRO)
-            col_c, col_d = st.columns([1, 2])
-            with col_c:
-                 generate_video = st.checkbox("➕ Roteiro de Vídeo (Reels/TikTok)")
-            with col_d:
-                if generate_video and user_plan != "pro":
-                    st.warning("⚠️ Recurso PRO! Disponível apenas para o Plano PRO.")
-                elif generate_video and user_plan == "pro":
-                    st.success("✅ Recurso PRO ativado.")
-                elif generate_video:
-                    # Se o plano for starter ou free (e o warning já foi dado)
-                    pass
-
-
-            description = st.text_area("Descrição do produto e o que você quer vender (máx. 800 caracteres):", max_chars=800)
+            with col_tone:
+                 tone = st.selectbox(
+                    "Qual Tom de Voz usar?", 
+                    ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
+                )
             
-            submitted = st.form_submit_button("Gerar Anúncio com IA")
+            description = st.text_area(
+                "Descreva seu produto (máximo 800 caracteres):", 
+                placeholder="Ex: 'Um curso online para iniciantes que ensina a investir na bolsa com pouco dinheiro, usando estratégias de baixo risco e zero jargão técnico.'", 
+                max_chars=800
+            )
+            
+            needs_video = st.checkbox(
+                "🚀 Gerar Roteiro de Vídeo (Reels/TikTok) - Exclusivo Plano PRO", 
+                value=False,
+                disabled=(not is_pro_user)
+            )
+            
+            # Botão de submissão
+            submitted = st.form_submit_button("🔥 Gerar Copy com a IA")
 
         if submitted:
             if not description:
-                st.error("Por favor, insira uma descrição do produto para gerar o anúncio.")
+                st.error("Por favor, forneça uma descrição detalhada do produto para a IA.")
+            elif needs_video and not is_pro_user:
+                st.error("⚠️ **Recurso PRO:** A Geração de Roteiro de Vídeo é exclusiva do Plano PRO. Por favor, desmarque a opção ou faça o upgrade.")
+            elif not OPENAI_KEY:
+                st.error("⚠️ Erro de Configuração: A chave de API (OPENAI_API_KEY) não está definida no secrets.toml.")
             else:
-                # O recurso de vídeo só será ativado na chamada se o plano for 'pro'
-                should_generate_video = generate_video and user_plan == "pro"
-
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
                     
-                    ad_content = call_gemini_api(product_type, description, tone, should_generate_video, user_plan)
-
-                    if ad_content:
-                        # 1. Incrementa a contagem no Firebase (APENAS se for plano free)
-                        if user_plan == "free":
-                            new_count = increment_ads_count(user_id)
-                        
-                        # 2. Exibição do resultado REAL da IA
-                        st.success(f"✅ Anúncio Gerado com Sucesso!")
-                        st.markdown("---")
-                        
-                        # Exibição Otimizada (UI/UX)
-                        st.markdown(f"## 💥 {ad_content.get('titulo_gancho', 'Título Gerado')}")
-                        st.caption(f"Tom de voz aplicado: **{tone}**")
-                        st.markdown("---")
-
-                        # Displaying the main copy
-                        st.markdown("### ✍️ Corpo do Anúncio (AIDA)")
-                        st.code(ad_content.get('copy_aida', 'Erro na copy'), language='markdown')
-
-                        # Displaying CTA and Segmentation side-by-side
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown("### 📢 Chamada para Ação (CTA)")
-                            st.code(ad_content.get('call_to_action', 'Erro no CTA'), language='markdown')
-                        
-                        with col2:
-                            st.markdown("### 🧠 Estratégia e Segmentação")
-                            st.info(ad_content.get('segmentacao_e_ideias', 'Erro na segmentação'))
-                        
-                        st.markdown("---")
-                        
-                        # --- EXIBIÇÃO DO ROTEIRO DE VÍDEO (RECURSO PRO) ---
-                        if "gancho_video" in ad_content:
-                            with st.expander("🎬 Roteiro de Vídeo Curto (Reels/TikTok) - RECURSO PRO", expanded=True):
-                                st.markdown(f"**Gancho (Hook - 5 Segundos):**")
-                                st.code(ad_content['gancho_video'])
-                                st.markdown("---")
-                                st.markdown("**Roteiro Básico (Cena + Ação):**")
-                                st.code(ad_content['roteiro_basico'], language='markdown')
-                        elif generate_video and user_plan != "pro":
-                            # Mensagem para quem tentou usar o PRO no plano FREE
-                             st.info(f"✨ **Roteiro de Vídeo:** Este é um recurso exclusivo do Plano PRO. Faça upgrade para desbloquear!")
-                        
+                    # 1. Chamada REAL à API
+                    api_result = call_gemini_api(description, product_type, tone, is_pro_user, needs_video)
+                    
+                    if "error" in api_result:
+                        st.error(f"❌ Erro na Geração da Copy: {api_result['error']}")
+                        st.info("A contagem de uso NÃO foi debitada. Tente novamente.")
                     else:
-                        st.error("Falha ao gerar o anúncio. Tente novamente ou verifique as chaves da API.")
+                        # 2. Incrementa a contagem no Firebase/Simulação
+                        new_count = increment_ads_count(user_id, user_plan)
+                        
+                        # 3. Exibição do resultado
+                        st.success(f"✅ Copy Gerada com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
+                        
+                        st.markdown("---")
+                        st.subheader("Resultado da Copy")
+                        
+                        # TÍTULO GANCHO
+                        col_t, col_b = st.columns([0.8, 0.2])
+                        with col_t:
+                            st.markdown("#### 🎯 Título Gancho (Atenção)")
+                        display_result_box("Título", api_result.get("titulo_gancho", "N/A"), "title_box")
 
-    # Botão de debug
-    if st.session_state["db"] != "SIMULATED":
-        if st.button("Ver Meus Dados no Firestore (Debug)"):
-            st.json(user_data)
-            
+                        # COPY AIDA
+                        st.markdown("#### 📝 Copy Principal (Interesse, Desejo, Ação)")
+                        display_result_box("Copy AIDA", api_result.get("copy_aida", "N/A"), "copy_box")
+
+                        # CTA
+                        st.markdown("#### 📢 Chamada para Ação (CTA)")
+                        display_result_box("CTA", api_result.get("chamada_para_acao", "N/A"), "cta_box")
+                        
+                        # SEGMENTAÇÃO
+                        st.markdown("#### 💡 Ideias de Segmentação")
+                        display_result_box("Segmentação", api_result.get("segmentacao_e_ideias", "N/A"), "seg_box")
+                        
+                        
+                        # ROTEIRO DE VÍDEO (EXCLUSIVO PRO)
+                        if is_pro_user and needs_video:
+                            st.markdown("---")
+                            st.subheader("🎥 Roteiro PRO de Vídeo (Reels/TikTok)")
+                            with st.expander("Clique para ver o Roteiro Completo"):
+                                # GANCHO VÍDEO
+                                st.markdown("##### Gancho (Hook) de 3 Segundos")
+                                display_result_box("Gancho Video", api_result.get("gancho_video", "N/A"), "hook_box")
+                                
+                                # ROTEIRO BÁSICO
+                                st.markdown("##### Roteiro Completo (30s)")
+                                display_result_box("Roteiro", api_result.get("roteiro_basico", "N/A"), "roteiro_box")
+
+
+# ----------------------------------------------------
+#               DEBUG E STATUS FINAL
+# ----------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown("##### Status do Sistema")
 if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-    st.success("✅ Firebase está funcionando e autenticado corretamente.")
+    st.sidebar.success("✅ Conexão Firebase OK")
+elif st.session_state.get("db") == "SIMULATED":
+    st.sidebar.warning("⚠️ Firebase: MODO SIMULADO")
+
+if OPENAI_KEY:
+    st.sidebar.success("✅ Chave de API OK")
 else:
-    st.warning("⚠️ Firebase em modo simulado (sem conexão ativa).")
+    st.sidebar.error("❌ Chave de API AUSENTE")
