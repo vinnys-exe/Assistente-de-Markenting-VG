@@ -97,11 +97,12 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
+# A chave de API do Gemini, limite de uso gratuito e email do desenvolvedor 
+# são lidos do arquivo de segredos do Streamlit.
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") 
 FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
+DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "") 
 
-# Puxa o e-mail do secrets.toml para dar acesso PRO
-DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "")
 
 # ----------------------------------------------------
 #               CONFIGURAÇÃO DO FIREBASE
@@ -114,24 +115,29 @@ if 'db' not in st.session_state:
     st.session_state['firebase_app'] = None
     
     try:
-        firebase_config = st.secrets.get("firebase", None)
+        # Busca a configuração do Firebase (agora na seção [firebase] do secrets.toml)
+        firebase_config = st.secrets.get("firebase", None) 
         
         if not firebase_config:
+            # Se não houver config, entra em modo SIMULADO
             st.session_state["db"] = "SIMULATED"
             
         else:
             private_key_raw = firebase_config.get("private_key", "")
             
+            # Trata a chave privada se ela foi colada com aspas simples (e.g., '\n')
             if "\\n" in private_key_raw:
                 private_key = private_key_raw.replace("\\n", "\n")
             else:
                 private_key = private_key_raw
             
+            # Constrói o dicionário de credenciais a partir do secrets.toml
             service_account_info = {
                 k: v for k, v in firebase_config.items() if k not in ["private_key"]
             }
             service_account_info["private_key"] = private_key
 
+            # Inicializa o Firebase Admin SDK
             if not firebase_admin._apps: 
                 cred = credentials.Certificate(service_account_info)
                 # Inicializa com um nome de app específico
@@ -147,6 +153,7 @@ if 'db' not in st.session_state:
             st.session_state["auth"] = auth
 
     except Exception as e:
+        # Se houver erro na conexão (configuração errada), cai em modo simulado
         st.info(f"A contagem de anúncios usará um sistema SIMULADO: {e}")
         st.session_state["db"] = "SIMULATED" 
         st.session_state["auth"] = "SIMULATED"
@@ -156,7 +163,7 @@ if 'db' not in st.session_state:
 # ----------------------------------------------------
 
 def clean_email_to_doc_id(email: str) -> str:
-    """Limpa o e-mail para usar como Document ID (removendo alias '+' e caracteres especiais)."""
+    """Limpa o e-mail para usar como Document ID e comparações (removendo alias '+' e caracteres especiais)."""
     clean_email = email.lower().strip()
     if "+" in clean_email:
         local_part, domain = clean_email.split("@")
@@ -171,8 +178,8 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
     
     # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PREMIUM forçado)
-    dev_doc_id = clean_email_to_doc_id(DEVELOPER_EMAIL)
-    if user_id.lower() == dev_doc_id:
+    # Compara o email logado com o email do desenvolvedor (Vinicius).
+    if st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
         return {"ads_generated": 0, "plan_tier": "premium"} 
     
     # 2. MODO FIREBASE
@@ -222,19 +229,13 @@ def handle_login(email: str, password: str):
             st.error("Serviço de autenticação desativado. Login simulado não suportado neste modo.")
             return
 
+        # Tentativa de obter o usuário para verificar existência
         user = st.session_state['auth'].get_user_by_email(email)
         
-        # O Firebase Admin SDK não tem uma função direta de 'signInWithEmailAndPassword'
-        # que aceite apenas credenciais de serviço, por questões de segurança.
-        # No Streamlit, a forma mais segura é simular a validação ou usar um Custom Token
-        # para a API REST. Para simplificar, faremos uma verificação parcial de credenciais
-        # e confiaremos na segurança do Auth para gerenciar as permissões reais.
-        
-        # Para fins de demonstração, e dado o ambiente Streamlit/Admin, vamos
-        # apenas checar se o usuário existe, e marcar como logado.
-        
-        # Em um app de produção com Streamlit, o ideal é usar o JS/API REST para login
-        # e passar o token de volta. Aqui, confiamos que a senha foi validada em outro lugar.
+        # NOTE: Em uma aplicação real, aqui seria feita a verificação de senha
+        # usando o Firebase Client SDK. Como estamos usando o Admin SDK para a demo,
+        # assumimos que se o usuário existe, o login é bem-sucedido para fins de demonstração
+        # da UI e do sistema de tiers.
         
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
@@ -289,11 +290,11 @@ def handle_logout():
     st.experimental_rerun()
 
 # ----------------------------------------------------
-#           FUNÇÕES DE CHAMADA DA API (GEMINI) - MANTIDAS
+#           FUNÇÕES DE CHAMADA DA API (GEMINI)
 # ----------------------------------------------------
 
 def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool) -> Union[Dict, str]:
-    """Chama a API (simulando Gemini/OpenAI) para gerar copy em formato JSON."""
+    """Chama a API do Gemini para gerar copy em formato JSON."""
     
     api_key = GEMINI_KEY
     if not api_key:
@@ -326,17 +327,16 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         "propertyOrdering": ["titulo_gancho", "copy_aida", "chamada_para_acao", "segmentacao_e_ideias"]
     }
 
-    # ADICIONA RECURSOS PREMIUM
+    # ADICIONA RECURSOS PREMIUM (Roteiro e Campanhas)
     if is_premium and needs_video:
-        system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed."
+        system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed. Gere também uma sugestão de 3 títulos de campanhas para teste A/B no Meta Ads."
+        
+        # Adiciona novos campos ao esquema de saída
         output_schema['properties']['gancho_video'] = {"type": "STRING", "description": "Um HOOK (gancho) de 3 segundos que interrompe a rolagem do feed."}
         output_schema['properties']['roteiro_basico'] = {"type": "STRING", "description": "Um roteiro conciso de 30 segundos em 3 etapas (Problema, Solução/Benefício, CTA)."}
-        output_schema['propertyOrdering'].extend(['gancho_video', 'roteiro_basico'])
-        
-        # NOVO RECURSO: SUGESTÕES DE CAMPANHA
-        system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere também uma sugestão de 3 títulos de campanhas para teste A/B no Meta Ads."
         output_schema['properties']['sugestao_campanhas'] = {"type": "STRING", "description": "3 títulos de campanhas agressivas para teste A/B."}
-        output_schema['propertyOrdering'].extend(['sugestao_campanhas'])
+        
+        output_schema['propertyOrdering'].extend(['gancho_video', 'roteiro_basico', 'sugestao_campanhas'])
 
 
     # 2. CONSTRUÇÃO DO PAYLOAD
@@ -359,6 +359,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
             response.raise_for_status() 
             
             result = response.json()
+            # Tenta extrair o texto JSON gerado pelo modelo
             json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
             
             return json.loads(json_text)
@@ -489,6 +490,7 @@ def display_result_box(icon: str, title: str, content: str, key: str):
 #               INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
+# Inicialização dos estados de sessão de autenticação
 if 'logged_in_user_id' not in st.session_state:
     st.session_state['logged_in_user_id'] = None
 if 'logged_in_user_email' not in st.session_state:
@@ -641,7 +643,7 @@ else:
             elif not GEMINI_KEY:
                 st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml.")
                 
-                # SIMULAÇÃO DE RESULTADO
+                # --- SIMULAÇÃO DE RESULTADO (SE A CHAVE DA API ESTIVER AUSENTE) ---
                 st.warning("Gerando Resultado Simulado para Teste de UI/Contagem. Se a chave estivesse OK, o resultado real apareceria abaixo.")
                 
                 new_count = increment_ads_count(user_id, user_plan_tier)
