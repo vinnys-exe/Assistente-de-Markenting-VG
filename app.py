@@ -11,47 +11,87 @@ from typing import Dict, Any, Union
 import re 
 import base64
 
-# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO ---
+# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO (ATUALIZADO PARA PROFISSIONAL) ---
 st.set_page_config(page_title="✨ AnuncIA - Gerador de Anúncios", layout="centered")
 
-# Injeção de CSS para layout e estética
+# --- CSS PROFISSIONAL V3.0 ---
 st.markdown("""
 <style>
-/* Remove padding top e laterais do Streamlit */
+/* 1. CONFIGURAÇÃO BASE GERAL */
+body {
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    color: #333;
+}
 .block-container {
     padding-top: 2rem;
-    padding-left: 1rem;
-    padding-right: 1rem;
+    padding-left: 1.5rem; /* Aumenta um pouco o respiro lateral */
+    padding-right: 1.5rem;
     padding-bottom: 2rem;
 }
 
-/* Customiza cor de botões e widgets principais */
-div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
-    border-radius: 10px;
-    border: 1px solid #52b2ff; 
-}
-
-/* Cor de fundo para o sidebar */
+/* 2. SIDEBAR COM GRADIENTE SUAVE (Efeito profissional) */
 [data-testid="stSidebar"] {
-    background-color: #f7f7f7;
-    border-right: 1px solid #eee;
+    background: linear-gradient(180deg, #ffffff, #e0f7fa); /* Fundo claro com toque de cor */
+    border-right: 1px solid #ddd;
+    box-shadow: 2px 0 5px rgba(0, 0, 0, 0.05); /* Sombra sutil na borda */
+}
+[data-testid="stSidebar"] .stButton > button {
+    border: 1px solid #00bcd4; /* Cor de destaque para botões importantes */
 }
 
-/* Destaque para as caixas de resultado (Shadow) */
-.stCode, .stTextarea > div, [data-testid="stExpander"] {
+/* 3. TÍTULO PRINCIPAL (Branding) */
+h1 {
+    color: #007bbd; /* Azul de branding */
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.05);
+    font-weight: 700;
+}
+h2, h3, h4 {
+    color: #333;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+}
+
+
+/* 4. ESTILO DE CARTÃO E BORDAS (Containers e Textareas) */
+/* Usaremos principalmente st.container(border=True) para o visual moderno */
+[data-testid="stExpander"], [data-testid="stForm"], .stTextArea > div {
     border-radius: 12px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e0e0e0;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.04);
     background-color: #ffffff;
     padding: 15px;
+    transition: box-shadow 0.3s ease;
 }
-.stCode:hover, .stTextarea:hover {
-    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
-    transition: all 0.3s ease-in-out;
+[data-testid="stExpander"]:hover, [data-testid="stForm"]:hover {
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.08);
+}
+/* Estiliza o container que imita o resultado, tirando a borda dupla */
+.stContainer {
+    border-radius: 12px !important;
 }
 
-/* Estilo para o botão PRO (upgrade na sidebar e na tela de planos) */
+/* 5. WIDGETS E BOTÕES (Inputs e Selects) */
+div.stButton > button:first-child {
+    background-color: #00bcd4; /* Cor primária Ciano */
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-weight: bold;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: background-color 0.2s;
+}
+div.stButton > button:first-child:hover {
+    background-color: #0097a7; /* Ciano mais escuro no hover */
+}
+.stMultiSelect, .stSelectbox, .stTextInput > div, .stTextArea > div {
+    border-radius: 8px;
+    border: 1px solid #ccc;
+}
+
+/* 6. BOTÕES DE UPGRADE (PRO) */
 .pro-button a button {
-    background-color: #52b2ff !important;
+    background-color: #ff5722 !important; /* Laranja de destaque (Hot) */
     color: white !important;
     border: none !important;
     padding: 10px 20px !important;
@@ -59,52 +99,38 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
     font-size: 16px !important;
     cursor: pointer !important;
     font-weight: bold;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15); /* Adiciona sombra para destaque */
+    box-shadow: 0 4px 8px rgba(255, 87, 34, 0.3); 
     transition: all 0.2s;
 }
 .pro-button a button:hover {
-    background-color: #007bff !important;
+    background-color: #e64a19 !important;
     transform: translateY(-2px);
 }
-
-/* Estilo para o cartão de plano (Tiered Pricing) */
-.plan-card {
-    padding: 15px;
-    border-radius: 12px;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-}
 .plan-highlight {
-    border: 3px solid #ff4b4b; /* Vermelho/laranja de destaque */
-    background-color: #fff0f0;
-    box-shadow: 0 6px 12px rgba(255, 75, 75, 0.2);
+    border: 3px solid #ff5722; /* Borda laranja no plano premium */
+    background-color: #fff3e0;
+    box-shadow: 0 6px 12px rgba(255, 87, 34, 0.2);
     transform: scale(1.02);
 }
-.price-tag {
-    font-size: 2.5em;
-    font-weight: bold;
-    margin: 5px 0;
-}
-.strike-through {
-    text-decoration: line-through;
-    color: #888;
-    font-size: 0.9em;
+
+/* 7. CORES DE STATUS (Avisos e Sucesso) */
+.stAlert > div {
+    border-radius: 8px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
+# Usamos .get() com um valor padrão para evitar erro se a seção/chave não existir
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "") 
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
-DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "") 
+DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com") 
 # Garante que o e-mail do desenvolvedor seja limpo para a verificação
 DEVELOPER_EMAIL_CLEAN = re.sub(r'[^\w@\.\-]', '_', DEVELOPER_EMAIL.lower().strip().split('+')[0])
 
 # ----------------------------------------------------
-#               CONFIGURAÇÃO DO FIREBASE 
+#               CONFIGURAÇÃO DO FIREBASE (IMUTÁVEL)
 # ----------------------------------------------------
 
 # Inicialização dos estados de sessão de autenticação
@@ -119,15 +145,12 @@ if 'db' not in st.session_state:
 def initialize_firebase():
     """Tenta inicializar o Firebase Admin SDK ou obtém a instância existente."""
     
-    # Nome de instância para garantir unicidade
     APP_NAME = "anuncia_app_instance"
     
     try:
-        # 1. Tenta obter a instância, se já existir
         app = firebase_admin.get_app(APP_NAME)
         
     except ValueError:
-        # 2. Se a instância não existir, inicializa
         try:
             firebase_config = st.secrets.get("firebase", None) 
             
@@ -135,43 +158,37 @@ def initialize_firebase():
                 st.info("A contagem de anúncios usará um sistema **SIMULADO**: Credenciais Firebase não encontradas.")
                 return "SIMULATED", "SIMULATED", None
             
-            # --- Lógica de Tratamento Crítico da Chave Privada ---
             private_key_raw = firebase_config.get("private_key", "")
             if "\\n" in private_key_raw:
                 private_key = private_key_raw.replace("\\n", "\n")
             else:
                 private_key = private_key_raw
             
-            # Constrói o dicionário de credenciais a partir do secrets.toml
             service_account_info = {
                 k: v for k, v in firebase_config.items() if k not in ["private_key"]
             }
             service_account_info["private_key"] = private_key
 
-            # Inicializa o app com o nome definido
             cred = credentials.Certificate(service_account_info)
             app = initialize_app(cred, name=APP_NAME)
             
         except Exception as e:
-            # Trata erros durante a inicialização (e.g., chave mal formatada)
             st.error(f"❌ Erro Crítico na Inicialização Firebase. Contagem SIMULADA: {e}")
             return "SIMULATED", "SIMULATED", None
 
-    # 3. Retorna os objetos de conexão
     db_client = firestore.client(app=app)
     return db_client, auth, app
 
-# Chamada principal para inicialização (Executa apenas uma vez)
 if st.session_state['db'] is None:
     st.session_state['db'], st.session_state['auth'], st.session_state['firebase_app'] = initialize_firebase()
 
 
 # ----------------------------------------------------
-#       FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
+#       FUNÇÕES DE CONTROLE DE USO (IMUTÁVEL)
 # ----------------------------------------------------
 
 def clean_email_to_doc_id(email: str) -> str:
-    """Limpa o e-mail para usar como Document ID e comparações (removendo alias '+' e caracteres especiais)."""
+    """Limpa o e-mail para usar como Document ID e comparações."""
     clean_email = email.lower().strip()
     if "+" in clean_email:
         local_part, domain = clean_email.split("@")
@@ -184,7 +201,7 @@ def clean_email_to_doc_id(email: str) -> str:
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
     
-    # --- CORREÇÃO DE ADMIN/DEV: Força PREMIUM ILIMITADO ---
+    # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PREMIUM forçado)
     if st.session_state.get('logged_in_user_email'):
         logged_email_clean = clean_email_to_doc_id(st.session_state['logged_in_user_email'])
         if logged_email_clean == DEVELOPER_EMAIL_CLEAN:
@@ -197,7 +214,7 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
         doc = user_ref.get()
         if doc.exists:
             data = doc.to_dict()
-            data['plan_tier'] = data.get('plan_tier', 'free') # Default para 'free'
+            data['plan_tier'] = data.get('plan_tier', 'free') 
             return data
     
     # 3. MODO SIMULADO (Fallback)
@@ -206,7 +223,6 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
 
 def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     """Incrementa a contagem de anúncios SOMENTE se o plano for 'free'."""
-    # A contagem não é feita para planos pagos ou o DEVELOPER_EMAIL
     if current_plan_tier != "free":
         return 0 
         
@@ -214,7 +230,6 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     new_count = user_data.get("ads_generated", 0) + 1
     
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        # Modo Firebase (Atualiza o documento)
         user_ref = st.session_state["db"].collection("users").document(user_id)
         user_ref.set({
             "ads_generated": new_count,
@@ -222,14 +237,13 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
             "plan_tier": user_data.get("plan_tier", "free")
         }, merge=True)
     else:
-        # Modo Simulado
         user_data["ads_generated"] = new_count
         st.session_state[f"user_{user_id}"] = user_data
         
     return new_count
 
 # ----------------------------------------------------
-#           FUNÇÕES DE AUTENTICAÇÃO
+#           FUNÇÕES DE AUTENTICAÇÃO (IMUTÁVEL)
 # ----------------------------------------------------
 
 def handle_login(email: str, password: str):
@@ -239,13 +253,11 @@ def handle_login(email: str, password: str):
             st.error("Serviço de autenticação desativado. Login simulado não suportado neste modo.")
             return
 
-        # Pega a instância do app nomeado
         app_instance = st.session_state['firebase_app']
         if app_instance is None or app_instance == "SIMULATED":
             st.error("Erro Crítico: Referência do aplicativo Firebase não encontrada ou está em modo SIMULADO.")
             return
 
-        # Tenta obter o usuário, usando explicitamente a instância nomeada (app=app_instance)
         user = st.session_state['auth'].get_user_by_email(email, app=app_instance) 
         
         st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
@@ -267,13 +279,11 @@ def handle_register(email: str, password: str, username: str, phone: str):
             st.error("Serviço de autenticação desativado. Registro simulado não suportado neste modo.")
             return
             
-        # Pega a instância do app nomeado
         app_instance = st.session_state['firebase_app']
         if app_instance is None or app_instance == "SIMULATED":
             st.error("Erro Crítico: Referência do aplicativo Firebase não encontrada ou está em modo SIMULADO.")
             return
 
-        # 1. Cria o usuário no Firebase Auth, usando explicitamente a instância nomeada
         user = st.session_state['auth'].create_user(
             email=email,
             password=password,
@@ -281,7 +291,6 @@ def handle_register(email: str, password: str, username: str, phone: str):
             app=app_instance 
         )
 
-        # 2. Salva os dados adicionais no Firestore
         if st.session_state["db"] != "SIMULATED":
             st.session_state["db"].collection("users").document(user.uid).set({
                 "email": email,
@@ -292,7 +301,6 @@ def handle_register(email: str, password: str, username: str, phone: str):
                 "ads_generated": 0
             })
         
-        # 3. Loga o usuário
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
         st.success(f"Conta criada com sucesso! Bem-vindo(a), {username}.")
@@ -310,7 +318,7 @@ def handle_logout():
     st.experimental_rerun()
 
 # ----------------------------------------------------
-#           FUNÇÕES DE CHAMADA DA API (GEMINI)
+#           FUNÇÕES DE CHAMADA DA API (IMUTÁVEL)
 # ----------------------------------------------------
 
 def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool) -> Union[Dict, str]:
@@ -320,7 +328,6 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
     if not api_key:
         return {"error": "Chave de API (GEMINI_API_KEY) não configurada no secrets.toml."}
 
-    # Verifica os tiers do plano
     is_premium = (user_plan_tier == "premium")
 
     # 1. CONSTRUÇÃO DO PROMPT E SCHEMA
@@ -346,11 +353,9 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         "propertyOrdering": ["titulo_gancho", "copy_aida", "chamada_para_acao", "segmentacao_e_ideias"]
     }
 
-    # ADICIONA RECURSOS PREMIUM (Roteiro e Campanhas)
     if is_premium and needs_video:
         system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed. Gere também uma sugestão de 3 títulos de campanhas para teste A/B no Meta Ads."
         
-        # Adiciona novos campos ao esquema de saída
         output_schema['properties']['gancho_video'] = {"type": "STRING", "description": "Um HOOK (gancho) de 3 segundos que interrompe a rolagem do feed."}
         output_schema['properties']['roteiro_basico'] = {"type": "STRING", "description": "Um roteiro conciso de 30 segundos em 3 etapas (Problema, Solução/Benefício, CTA)."}
         output_schema['properties']['sugestao_campanhas'] = {"type": "STRING", "description": "3 títulos de campanhas agressivas para teste A/B."}
@@ -371,14 +376,13 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={api_key}"
     
-    # 3. CHAMADA HTTP (COM BACKOFF)
+    # 3. CHAMADA HTTP
     for i in range(3):
         try:
             response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
             response.raise_for_status() 
             
             result = response.json()
-            # Tenta extrair o texto JSON gerado pelo modelo
             json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
             
             return json.loads(json_text)
@@ -389,7 +393,6 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
                 continue
             return {"error": f"Erro de conexão com a API: {e}"}
         except json.JSONDecodeError:
-            # Captura a resposta bruta da API para debug
             raw_response_text = response.text if 'response' in locals() else "N/A"
             return {"error": f"A IA não conseguiu retornar um JSON válido. Resposta da API: {raw_response_text}"}
         except Exception as e:
@@ -409,7 +412,6 @@ def display_upgrade_page(user_id: str):
     
     st.markdown("Invista em copy de alta conversão para dominar o mercado.")
     
-    # Layout de 3 colunas para os planos (Melhoria de UI)
     col1, col2, col3 = st.columns(3)
     
     # Plano 1: Gratuito (Referência)
@@ -441,10 +443,10 @@ def display_upgrade_page(user_id: str):
     with col2:
         st.markdown(
             f"""
-            <div class="plan-card" style="background-color: #e0f2ff; border: 2px solid #52b2ff;">
-                <h4 style="color: #52b2ff; text-align: center;">Plano Essencial</h4>
+            <div class="plan-card" style="background-color: #e0f2ff; border: 2px solid #00bcd4;">
+                <h4 style="color: #00bcd4; text-align: center;">Plano Essencial</h4>
                  <div style="text-align: center;">
-                    <p class="price-tag" style="color: #52b2ff;">R$ 19,90</p>
+                    <p class="price-tag" style="color: #00bcd4;">R$ 19,90</p>
                     <p>por mês</p>
                 </div>
                 <ul style="list-style-type: '✅ '; padding-left: 20px; font-size: 0.95em;">
@@ -455,7 +457,7 @@ def display_upgrade_page(user_id: str):
                 </ul>
                 <div style="text-align: center; margin-top: 15px;" class="pro-button">
                     <a href="LINK_PARA_PAGAMENTO_ESSENCIAL" target="_blank" style="text-decoration: none;">
-                        <button>
+                        <button style="background-color: #00bcd4 !important; box-shadow: 0 4px 8px rgba(0, 188, 212, 0.3);">
                             ASSINAR AGORA →
                         </button>
                     </a>
@@ -469,10 +471,10 @@ def display_upgrade_page(user_id: str):
         st.markdown(
             f"""
             <div class="plan-card plan-highlight">
-                <h4 style="color: #ff4b4b; text-align: center;">🏆 Plano Premium</h4>
+                <h4 style="color: #ff5722; text-align: center;">🏆 Plano Premium</h4>
                  <div style="text-align: center;">
                     <p class="strike-through">De R$ 49,90</p>
-                    <p class="price-tag" style="color: #ff4b4b;">R$ 34,90</p>
+                    <p class="price-tag" style="color: #ff5722;">R$ 34,90</p>
                     <p>por mês **(Mais Vantajoso)**</p>
                 </div>
                 <ul style="list-style-type: '✅ '; padding-left: 20px; font-size: 0.95em;">
@@ -483,7 +485,7 @@ def display_upgrade_page(user_id: str):
                 </ul>
                 <div style="text-align: center; margin-top: 15px;" class="pro-button">
                     <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank" style="text-decoration: none;">
-                        <button style="background-color: #ff4b4b !important;">
+                        <button>
                             EU QUERO O PREMIUM!
                         </button>
                     </a>
@@ -498,30 +500,30 @@ def display_upgrade_page(user_id: str):
 
 def display_result_box(icon: str, title: str, content: str, key: str):
     """Exibe o conteúdo em um text_area com botão de cópia nativo e ícone."""
-    st.markdown(f"**{icon} {title}**")
-    st.text_area(
-        label=title,
-        value=content,
-        height=None,
-        key=key,
-        label_visibility="collapsed"
-    )
+    # Usamos o container para a borda visual, e o text_area para o recurso de cópia.
+    with st.container(border=True):
+        st.markdown(f"**{icon} {title}**")
+        st.text_area(
+            label=title,
+            value=content,
+            height=None,
+            key=key,
+            label_visibility="collapsed"
+        )
 
 # ----------------------------------------------------
 #               INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
-st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão") # Título melhorado
+st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão") 
 
 # --- PAINEL DE LOGIN/REGISTRO NA SIDEBAR ---
 with st.sidebar:
     st.markdown("---")
     if st.session_state['logged_in_user_id']:
-        # Se logado, mostra informações do usuário e botão de logout
         st.success(f"Logado como: {st.session_state['logged_in_user_email']}")
         st.button("Sair (Logout)", on_click=handle_logout, use_container_width=True)
     else:
-        # Se deslogado, mostra as opções de Login/Registro
         st.markdown("## 🔑 Acesso ao Sistema")
         login_mode = st.radio("Escolha a Ação:", ["Entrar", "Criar Conta"])
 
@@ -559,7 +561,7 @@ with st.sidebar:
 if not st.session_state['logged_in_user_id']:
     st.info("Por favor, faça **Login** ou **Crie sua Conta** na barra lateral para começar seu teste grátis.")
 else:
-    # --- Verificação de Limite e Exibição de Status (Melhorado) ---
+    # --- Verificação de Limite e Exibição de Status ---
     user_id = st.session_state['logged_in_user_id']
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
@@ -569,7 +571,6 @@ else:
     
     st.markdown("---")
     
-    # Exibição do Status (Melhorado com UX)
     tier_info_map = {
         "free": {"icon": "🆓", "color": "blue", "text": "Plano Grátis"},
         "essential": {"icon": "⚡", "color": "orange", "text": "Plano Essencial"},
@@ -577,11 +578,9 @@ else:
     }
     current_tier_info = tier_info_map.get(user_plan_tier, tier_info_map["free"])
         
-    # Layout de status
     col_status, col_upgrade_link = st.columns([2, 1])
 
     with col_status:
-        # Verifica se o e-mail logado é o e-mail de Desenvolvedor
         is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == DEVELOPER_EMAIL_CLEAN
         
         if is_dev:
@@ -595,11 +594,10 @@ else:
 
     with col_upgrade_link:
         if user_plan_tier == "free" and not is_dev:
-            # Botão de Upgrade Flutuante
             st.markdown(f"""
                 <div style="text-align: right; margin-top: 10px;" class="pro-button">
                     <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank" style="text-decoration: none;">
-                        <button style="background-color: #52b2ff !important; font-size: 14px !important; padding: 8px 15px !important;">
+                        <button style="background-color: #ff5722 !important; font-size: 14px !important; padding: 8px 15px !important;">
                             FAÇA UPGRADE AGORA
                         </button>
                     </a>
@@ -608,7 +606,6 @@ else:
             
     st.markdown("---")
 
-    # Botão de Upgrade na Sidebar
     with st.sidebar:
         if user_plan_tier == "free" or user_plan_tier == "essential":
             st.markdown("---")
@@ -616,8 +613,8 @@ else:
             st.markdown("""
             <div style="text-align: center;" class="pro-button">
                 <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank">
-                    <button style="background-color: #ff4b4b !important;">
-                        UPGRADE (Economize!)
+                    <button>
+                        UPGRADE (Acesso Total)
                     </button>
                 </a>
             </div>
@@ -632,14 +629,12 @@ else:
         with st.form("input_form"):
             st.subheader("🛠️ Crie Seu Anúncio Profissional")
             
-            # PLACEHOLDER MELHORADO
             description = st.text_area(
                 "Descreva seu produto (máximo 800 caracteres):", 
                 placeholder="""Ex: 'Um curso online para iniciantes que ensina a investir na bolsa com pouco dinheiro, usando estratégias de baixo risco e zero jargão técnico.'\n\nInclua: Nome do Produto, Público-alvo, Benefício principal e Oferta (preço/promoção).""", 
                 max_chars=800
             )
             
-            # CONFIGURAÇÕES MOVIDAS PARA EXPANDER (Melhoria de UI)
             with st.expander("⚙️ Configurações de Copy (Tom e Tipo de Produto)"):
                 col_type, col_tone = st.columns(2)
                 
@@ -655,7 +650,6 @@ else:
                           ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
                       )
 
-            # Recurso exclusivo do PREMIUM
             needs_video = st.checkbox(
                 "🎬 Gerar Roteiro de Vídeo (Reels/TikTok) e Sugestão de Campanhas - Exclusivo Plano Premium", 
                 value=False,
@@ -663,7 +657,6 @@ else:
             )
             
             st.markdown("---")
-            # Botão de submissão
             submitted = st.form_submit_button("🔥 Gerar Copy com a IA", use_container_width=True)
 
         if submitted:
@@ -699,7 +692,6 @@ else:
                     api_result = call_gemini_api(description, product_type, tone, user_plan_tier, needs_video)
                     
                     if "error" in api_result:
-                        # Exibirá o erro de JSON se o modelo não retornar o formato correto (incluindo o texto da API para debug)
                         st.error(f"❌ Erro na Geração da Copy: {api_result['error']}")
                         st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
                     else:
