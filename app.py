@@ -12,9 +12,9 @@ import re
 import base64
 
 # --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO ---
-st.set_page_config(page_title="✨ AnuncIA - Gerador de Anúncios", layout="centered")
+st.set_page_config(page_title="✨ AnuncIA - Gerador de Estratégia de Marketing", layout="wide")
 
-# --- CSS PROFISSIONAL V5.0 ---
+# --- CSS PROFISSIONAL V5.0 (MANTIDO) ---
 st.markdown("""
 <style>
 /* 1. CONFIGURAÇÃO BASE GERAL */
@@ -102,13 +102,30 @@ div.stButton > button:first-child:hover {
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "")
-FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3)) # Puxa o limite real (e.g., 100000000)
+FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
 DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com")
-# Garante que o e-mail do desenvolvedor seja limpo para a verificação
 DEVELOPER_EMAIL_CLEAN = re.sub(r'[^\w@\.\-]', '_', DEVELOPER_EMAIL.lower().strip().split('+')[0])
 
 # ----------------------------------------------------
-#                CONFIGURAÇÃO DO FIREBASE (IMUTÁVEL)
+#               FUNÇÕES DE UTILIADE MULTIMODAL (NOVO)
+# ----------------------------------------------------
+
+def file_to_base64(uploaded_file):
+    """Converte um objeto FileUploader do Streamlit para Base64."""
+    if uploaded_file is not None:
+        # A API Gemini aceita base64 para imagens in-line
+        return base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
+    return None
+
+def get_mime_type(uploaded_file):
+    """Obtém o tipo MIME de um arquivo Streamlit uploaded_file."""
+    if uploaded_file is not None:
+        return uploaded_file.type
+    return "text/plain" # Default/Fallback
+
+
+# ----------------------------------------------------
+#                CONFIGURAÇÃO DO FIREBASE (MANTIDO)
 # ----------------------------------------------------
 
 if 'db' not in st.session_state:
@@ -133,7 +150,6 @@ def initialize_firebase():
                 st.info("A contagem de anúncios usará um sistema **SIMULADO**: Credenciais Firebase não encontradas.")
                 return "SIMULATED", "SIMULATED", None
             
-            # Ajuste de quebra de linha da chave privada lida do TOML
             private_key_raw = firebase_config.get("private_key", "")
             if "\\n" in private_key_raw:
                 private_key = private_key_raw.replace("\\n", "\n")
@@ -144,7 +160,6 @@ def initialize_firebase():
                 k: v for k, v in firebase_config.items() if k not in ["private_key"]
             }
             service_account_info["private_key"] = private_key
-            # Usamos o 'client_x509_cert_url' como fallback se o 'type' não estiver explícito
             service_account_info["type"] = service_account_info.get("type", "service_account")
 
             cred = credentials.Certificate(service_account_info)
@@ -162,7 +177,7 @@ if st.session_state['db'] is None:
 
 
 # ----------------------------------------------------
-#       FUNÇÕES DE CONTROLE DE USO E PLANO
+#       FUNÇÕES DE CONTROLE DE USO E PLANO (MANTIDAS)
 # ----------------------------------------------------
 
 def clean_email_to_doc_id(email: str) -> str:
@@ -173,7 +188,6 @@ def clean_email_to_doc_id(email: str) -> str:
         local_part = local_part.split("+")[0]
         clean_email = f"{local_part}@{domain}"
     
-    # Substitui caracteres especiais restantes por '_' (para Document ID)
     user_doc_id = re.sub(r'[^\w@\.\-]', '_', clean_email)
     return clean_email
 
@@ -184,7 +198,6 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     if st.session_state.get('logged_in_user_email'):
         logged_email_clean = clean_email_to_doc_id(st.session_state['logged_in_user_email'])
         
-        # O seu e-mail de desenvolvedor: 'viniciusp.santana07@gmail.com'
         if logged_email_clean == clean_email_to_doc_id(DEVELOPER_EMAIL):
             # Se o e-mail for o Admin, força o plano PREMIUM (ilimitado/vitalício)
             return {"ads_generated": 0, "plan_tier": "premium"}
@@ -205,14 +218,12 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
 def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     """Incrementa a contagem de anúncios SOMENTE se o plano for 'free' e o limite não foi atingido."""
     
-    # ESSENCIAL E PREMIUM SÃO ILIMITADOS (ou se o limite free for muito alto)
     if current_plan_tier != "free":
         return 0
         
     user_data = get_user_data(user_id)
     current_count = user_data.get("ads_generated", 0)
     
-    # Verifica se o limite free foi atingido (mesmo que seja 100 milhões)
     if current_count >= FREE_LIMIT:
         return current_count
         
@@ -234,9 +245,8 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
 def save_user_feedback(user_id: str, rating: str, input_prompt: str, ai_response: str):
     """Salva o feedback do usuário no Firestore para melhoria da IA."""
     
-    # 1. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        feedback_ref = st.session_state["db"].collection("feedback").document() # Gera um ID automático
+        feedback_ref = st.session_state["db"].collection("feedback").document()
         
         rating_map = {'Ruim 😭': 1, 'Mais ou Menos 🤔': 2, 'Bom 👍': 3, 'Ótimo! 🚀': 4}
         rating_score = rating_map.get(rating, 0)
@@ -255,28 +265,19 @@ def save_user_feedback(user_id: str, rating: str, input_prompt: str, ai_response
             st.error(f"Erro ao salvar feedback no Firestore: {e}")
             return False
             
-    # 2. MODO SIMULADO
     else:
         return True
 
 def update_user_plan(target_email: str, new_plan: str) -> bool:
-    """
-    Função administrativa/Webhook Simulada para alterar o plano de um usuário.
-    Esta função simula o que aconteceria após um pagamento bem-sucedido.
-    """
-    # 1. Limpar e-mail
+    """Função administrativa/Webhook Simulada para alterar o plano de um usuário."""
     clean_email = clean_email_to_doc_id(target_email)
 
-    # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
         try:
-            # Busca o UID (necessário para o Firestore)
             user_record = st.session_state['auth'].get_user_by_email(target_email, app=st.session_state['firebase_app'])
             user_id = user_record.uid
             
             user_ref = st.session_state["db"].collection("users").document(user_id)
-            
-            # Resetar a contagem de anúncios para 0 ao mudar para um plano pago.
             new_ads_count = 0 
             
             user_ref.set({
@@ -293,18 +294,13 @@ def update_user_plan(target_email: str, new_plan: str) -> bool:
             st.error(f"❌ Erro ao atualizar o plano no Firestore: {e}")
             return False
             
-    # 3. MODO SIMULADO
     else:
         st.info("Função de upgrade não executada. Firebase em modo SIMULADO.")
-        return False # Não permite alteração simulada de plano para evitar confusão
+        return False
 
-
-# ----------------------------------------------------
-#            FUNÇÕES DE AUTENTICAÇÃO (st.rerun CORRIGIDO)
-# ----------------------------------------------------
-
+# --- FUNÇÕES DE AUTENTICAÇÃO (MANTIDAS) ---
 def handle_login(email: str, password: str):
-    """Tenta autenticar um usuário."""
+    # ... (implementação da função login - MANTIDA)
     try:
         if st.session_state['auth'] == "SIMULATED":
             st.error("Serviço de autenticação desativado.")
@@ -313,8 +309,6 @@ def handle_login(email: str, password: str):
         app_instance = st.session_state['firebase_app']
         user = st.session_state['auth'].get_user_by_email(email, app=app_instance)
         
-        # NOTE: A verificação de senha REAL deve ser feita com o Firebase Client SDK (JS),
-        # mas aqui usamos o Admin para buscar o usuário. Assumimos login válido após essa busca.
         st.warning("Aviso: Login efetuado. Verificação de senha simulada (Admin SDK).")
         
         st.session_state['logged_in_user_email'] = email
@@ -328,7 +322,7 @@ def handle_login(email: str, password: str):
         st.error(f"Erro no login: {e}")
 
 def handle_register(email: str, password: str, username: str, phone: str):
-    """Cria um novo usuário."""
+    # ... (implementação da função register - MANTIDA)
     try:
         if st.session_state['auth'] == "SIMULATED":
             st.error("Serviço de autenticação desativado.")
@@ -369,36 +363,37 @@ def handle_logout():
     st.session_state['logged_in_user_id'] = None
     st.rerun()
 
+
 # ----------------------------------------------------
-#            FUNÇÕES DE CHAMADA DA API (IMUTÁVEL)
+#            FUNÇÕES DE CHAMADA DA API (ATUALIZADAS)
 # ----------------------------------------------------
 
-def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool) -> Union[Dict, str]:
-    """Chama a API do Gemini para gerar copy em formato JSON."""
+def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool, image_b64: str, mime_type: str) -> Union[Dict, str]:
+    """Chama a API do Gemini para gerar copy multimodal em formato JSON."""
     
     api_key = GEMINI_KEY
     if not api_key:
         return {"error": "Chave de API (GEMINI_API_KEY) não configurada no secrets.toml."}
 
-    # Recurso de vídeo/A/B é EXCLUSIVO do plano premium
     is_premium_feature = (user_plan_tier == "premium" and needs_video)
     
     system_instruction = f"""
     Você é um Copywriter de elite, especializado em Marketing Digital e Vendas Diretas.
-    Sua missão é gerar um anúncio altamente persuasivo e focado em conversão.
+    Sua missão é gerar um anúncio altamente persuasivo, focado em conversão e otimizado para o esboço de texto/título fornecido pelo usuário.
     
     Instruções de Tom: O tom de voz deve ser {tone}.
     Instruções de Estrutura: Use o Framework AIDA (Atenção, Interesse, Desejo, Ação).
     A copy deve ser concisa, focar no benefício do cliente e incluir gatilhos de escassez/urgência/prova social.
-    
     O produto é um {product_type}.
+    
+    Se uma imagem foi fornecida, analise-a para garantir que a copy seja contextualizada e maximize a conversão visual.
     """
     
     output_schema = {
         "type": "OBJECT",
         "properties": {
-            "titulo_gancho": {"type": "STRING", "description": "Um título chocante e que gere Atenção imediata, com no máximo 10 palavras."},
-            "copy_aida": {"type": "STRING", "description": "O texto principal (body copy) persuasivo, seguindo a estrutura AIDA (Atenção, Interesse, Desejo e Ação)."},
+            "titulo_gancho": {"type": "STRING", "description": "Um título chocante e que gere Atenção imediata, com no máximo 10 palavras. Otimize o rascunho de título fornecido."},
+            "copy_aida": {"type": "STRING", "description": "O texto principal (body copy) persuasivo, seguindo a estrutura AIDA. Corrige e melhora o esboço de texto fornecido pelo usuário, focando na imagem (se houver)."},
             "chamada_para_acao": {"type": "STRING", "description": "Uma Chamada para Ação (CTA) clara e urgente."},
             "segmentacao_e_ideias": {"type": "STRING", "description": "Sugestões de 3 personas ou grupos de interesse para segmentação do anúncio."}
         },
@@ -407,17 +402,28 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
 
     if is_premium_feature:
         system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed. Gere também uma sugestão de 3 títulos de campanhas para teste A/B no Meta Ads."
-        
         output_schema['properties']['gancho_video'] = {"type": "STRING", "description": "Um HOOK (gancho) de 3 segundos que interrompe a rolagem do feed."}
         output_schema['properties']['roteiro_basico'] = {"type": "STRING", "description": "Um roteiro conciso de 30 segundos em 3 etapas (Problema, Solução/Benefício, CTA)."}
         output_schema['properties']['sugestao_campanhas'] = {"type": "STRING", "description": "3 títulos de campanhas agressivas para teste A/B."}
-        
         output_schema['propertyOrdering'].extend(['gancho_video', 'roteiro_basico', 'sugestao_campanhas'])
 
+    # CONSTRUÇÃO DO PAYLOAD (Multimodal)
+    contents = []
+    
+    if image_b64 and mime_type.startswith("image/"):
+        contents.append({
+            "inlineData": {
+                "data": image_b64,
+                "mimeType": mime_type
+            }
+        })
+    elif image_b64 and not mime_type.startswith("image/"):
+         user_description += "\n\nAVISO: O arquivo fornecido não é uma imagem (MIME Type: " + mime_type + "). Analise apenas o texto."
 
-    # 2. CONSTRUÇÃO DO PAYLOAD
+    contents.append({"text": user_description})
+
     payload = {
-        "contents": [{"parts": [{"text": user_description}]}],
+        "contents": contents,
         "systemInstruction": {"parts": [{"text": system_instruction}]},
         "config": {
             "responseMimeType": "application/json",
@@ -428,7 +434,6 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={api_key}"
     
-    # 3. CHAMADA HTTP
     try:
         response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
         response.raise_for_status()
@@ -436,23 +441,77 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         result = response.json()
         json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
         
-        # Retorna o dicionário para a UI
         return json.loads(json_text)
     
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Erro de conexão com a API: {e}"}
-    except json.JSONDecodeError:
-        raw_response_text = response.text if 'response' in locals() else "N/A"
-        return {"error": f"A IA não conseguiu retornar um JSON válido. Resposta da API: {raw_response_text}"}
     except Exception as e:
-        return {"error": f"Erro inesperado na chamada da API: {e}"}
+        return {"error": f"Erro na chamada da API de Copy: {e}"}
+
+
+def call_gemini_strategy(ad_copy_json: Dict, user_objective: str, user_description: str, user_plan_tier: str) -> Union[Dict, str]:
+    """Chama a API do Gemini para gerar a Estratégia de Canais e Público (NOVO)."""
+    
+    api_key = GEMINI_KEY
+    if not api_key:
+        return {"error": "Chave de API (GEMINI_API_KEY) não configurada."}
+
+    copy_text = f"Título: {ad_copy_json.get('titulo_gancho', '')}\nCopy: {ad_copy_json.get('copy_aida', '')}\nCTA: {ad_copy_json.get('chamada_para_acao', '')}"
+    
+    system_instruction = f"""
+    Você é um Estrategista de Mídia Digital e Growth. Sua função é analisar a copy gerada e o objetivo do cliente para criar um plano de divulgação completo.
+    
+    Objetivo do Cliente: **{user_objective}**.
+    Tipo de Produto/Descrição: {user_description}
+    A Copy de Anúncio é: "{copy_text}"
+    
+    Analise as principais plataformas (Meta Ads/Instagram, TikTok e Google Ads) e forneça a melhor estratégia.
+    """
+
+    output_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "plataforma_principal": {"type": "STRING", "description": "A plataforma principal mais indicada (Ex: TikTok, Instagram, Google Search) para o objetivo e porquê."},
+            "publico_alvo_detalhado": {"type": "STRING", "description": "Uma descrição detalhada do público-alvo, incluindo interesses, dor principal e faixa etária."},
+            "estrategia_de_horarios": {"type": "STRING", "description": "Sugestão dos 3 melhores horários de postagem ou veiculação de anúncios na plataforma principal, com breve justificativa."},
+            "sugestoes_de_hashtags": {"type": "STRING", "description": "5-7 hashtags estratégicas e segmentadas para a divulgação."},
+            "ideia_de_criativo": {"type": "STRING", "description": "Sugestão de uma ideia de imagem ou um esboço de texto complementar que maximize a conversão na plataforma principal."},
+        },
+        "propertyOrdering": ["plataforma_principal", "publico_alvo_detalhado", "estrategia_de_horarios", "sugestoes_de_hashtags", "ideia_de_criativo"]
+    }
+
+    if user_plan_tier == "premium":
+        output_schema['properties']['roteiro_video_estrategico'] = {"type": "STRING", "description": "Um esboço de roteiro de vídeo estratégico (30 segundos) para a plataforma principal com foco em viralização/conversão."}
+        output_schema['propertyOrdering'].append('roteiro_video_estrategico')
+        
+    payload = {
+        "contents": [{"parts": [{"text": system_instruction}]}],
+        "config": {
+            "responseMimeType": "application/json",
+            "responseSchema": output_schema,
+            "temperature": 0.5
+        }
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={api_key}"
+    
+    try:
+        response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
+        response.raise_for_status()
+        
+        result = response.json()
+        json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
+        
+        return json.loads(json_text)
+    
+    except Exception as e:
+        return {"error": f"Erro na chamada da API de Estratégia: {e}"}
 
 # ----------------------------------------------------
-#            FUNÇÕES DE EXIBIÇÃO DA UI
+#            FUNÇÕES DE EXIBIÇÃO DA UI (MANTIDAS)
 # ----------------------------------------------------
 
 def display_upgrade_page(user_id: str):
     """Exibe a página de vendas/upgrade."""
+    # ... (Mantenha a implementação da display_upgrade_page - MANTIDA)
     st.markdown("---")
     st.subheader("🚀 Escolha seu Plano e Venda Mais!")
     st.warning("🚨 **Limite Gratuito Atingido!** Para continuar, selecione um plano.")
@@ -544,7 +603,6 @@ def display_upgrade_page(user_id: str):
     st.markdown(f"---")
     st.info(f"Seu ID de acesso (UID) é: **{user_id}**")
 
-
 def display_result_box(icon: str, title: str, content: str, key: str):
     """Exibe o conteúdo em um text_area com botão de cópia nativo e ícone."""
     with st.container(border=True):
@@ -557,11 +615,12 @@ def display_result_box(icon: str, title: str, content: str, key: str):
             label_visibility="collapsed"
         )
 
+
 # ----------------------------------------------------
 #                INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
-st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão")
+st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão & Estratégia")
 
 # --- PAINEL DE LOGIN/REGISTRO NA SIDEBAR ---
 with st.sidebar:
@@ -630,7 +689,6 @@ with st.sidebar:
         with st.expander("🛠️ ADMIN: Controle de Planos (Webhook Simulado)"):
             st.info("Painel DEV: Simule a compra de um plano para o usuário logado.")
             
-            # Puxa o e-mail logado para facilitar o teste
             target_email_admin = st.text_input("E-mail para Upgrade (Logado):", value=st.session_state['logged_in_user_email'])
             
             new_plan_admin = st.selectbox(
@@ -644,7 +702,6 @@ with st.sidebar:
                     success = update_user_plan(target_email_admin, new_plan_admin)
                     if success:
                         st.success(f"✅ Sucesso! Plano de {target_email_admin} alterado para {new_plan_admin.upper()}.")
-                        # Garante que o usuário logado veja a mudança imediatamente
                         if clean_email_to_doc_id(target_email_admin) == clean_email_to_doc_id(st.session_state['logged_in_user_email']):
                             st.rerun()
                     else:
@@ -658,13 +715,11 @@ with st.sidebar:
 if not st.session_state['logged_in_user_id']:
     st.info("Por favor, faça **Login** ou **Crie sua Conta** na barra lateral para começar seu teste grátis.")
 else:
-    # --- Releitura de Variáveis de Estado (Já feito no sidebar, mas repetido para clareza) ---
     user_id = st.session_state['logged_in_user_id']
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
     user_plan_tier = user_data.get("plan_tier", "free")
     
-    # Aplicação dos benefícios
     is_essential_or_premium = (user_plan_tier in ["essential", "premium"])
     is_premium = (user_plan_tier == "premium")
     is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL)
@@ -686,11 +741,10 @@ else:
         else:
             st.markdown(f"**Status:** {current_tier_info['icon']} **{current_tier_info['text']}**")
             
-            # Ajuste de exibição para limites muito grandes
             if user_plan_tier == "free" and FREE_LIMIT < 1000:
                 st.markdown(f"**Uso:** **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
             else:
-                st.markdown("Uso Ilimitado! 🎉") # Exibe ilimitado se for pago ou se o limite for muito grande
+                st.markdown("Uso Ilimitado! 🎉")
 
     with col_upgrade_link:
         if user_plan_tier == "free" and not is_dev:
@@ -706,18 +760,33 @@ else:
             
     st.markdown("---")
         
-    # Exibir página de upgrade SÓ SE o limite free for um número pequeno E o usuário for Free
     if user_plan_tier == "free" and ads_used >= FREE_LIMIT and FREE_LIMIT < 1000 and not is_dev:
         display_upgrade_page(user_id)
         
     else:
-        # --- Formulário de Geração de Anúncios ---
+        # --- Formulário de Geração de Anúncios (ATUALIZADO) ---
         with st.form("input_form"):
             st.subheader("🛠️ Crie Seu Anúncio Profissional")
             
+            col_obj, col_file = st.columns([1, 1])
+
+            with col_obj:
+                user_objective = st.selectbox(
+                    "🎯 Objetivo Principal da Campanha:",
+                    ["Vendas / Conversão", "Geração de Leads (Cadastros)", "Tráfego para o Site", "Reconhecimento de Marca / Divulgação"]
+                )
+
+            with col_file:
+                uploaded_file = st.file_uploader(
+                    "🖼️ Faça o upload da Imagem Principal do Anúncio (Opcional):",
+                    type=["png", "jpg", "jpeg", "webp"],
+                    help="A IA irá analisar a imagem para criar uma copy mais contextualizada."
+                )
+
             description = st.text_area(
-                "Descreva seu produto (máximo 800 caracteres):",
-                placeholder="""Ex: 'Um curso online para iniciantes que ensina a investir na bolsa com pouco dinheiro, usando estratégias de baixo risco e zero jargão técnico.'\n\nInclua: Nome do Produto, Público-alvo, Benefício principal e Oferta (preço/promoção).""",
+                "Esboço de Títulos e Textos:",
+                placeholder="""Forneça seus rascunhos de títulos, textos e/ou a descrição detalhada do produto (máximo 800 caracteres).
+A IA irá CORRIGIR, REESCREVER e OTIMIZAR seu esboço para alta conversão.""",
                 max_chars=800
             )
             
@@ -736,90 +805,127 @@ else:
                             ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
                       )
 
-            # O recurso Premium está sempre habilitado para o DEV
             needs_video = st.checkbox(
-                "🎬 Gerar Roteiro de Vídeo (Reels/TikTok) e Sugestão de Campanhas - Exclusivo Plano Premium",
+                "🎬 Gerar Roteiro de Vídeo (Reels/TikTok) e Sugestão de Campanhas A/B - Exclusivo Plano Premium",
                 value=is_premium and not is_dev,
-                disabled=(not is_premium and not is_dev) # Desabilitado se não for Premium E não for Dev
+                disabled=(not is_premium and not is_dev)
             )
             
             st.markdown("---")
-            submitted = st.form_submit_button("🔥 Gerar Copy com a IA", use_container_width=True)
+            submitted = st.form_submit_button("🔥 Gerar Copy e Estratégia Completa", use_container_width=True)
 
         if submitted:
             if not description:
-                st.error("Por favor, forneça uma descrição detalhada do produto para a IA.")
+                st.error("Por favor, forneça um esboço de texto ou descrição detalhada do produto para a IA.")
             elif needs_video and not is_premium and not is_dev:
-                st.error("⚠️ **Recurso Premium:** A Geração de Roteiro de Vídeo e Campanhas é exclusiva do Plano Premium.")
+                st.error("⚠️ **Recurso Premium:** A Geração de Roteiro de Vídeo e Campanhas A/B é exclusiva do Plano Premium.")
             elif not GEMINI_KEY:
                 st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida.")
                 
-                # ... (Bloco de Simulação omitido para brevidade, mas está no código final) ...
-                
             else:
-                # 1. Chamada REAL à API
-                with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
-                    api_result = call_gemini_api(description, product_type, tone, user_plan_tier, needs_video)
+                image_b64 = file_to_base64(uploaded_file)
+                mime_type = get_mime_type(uploaded_file)
+
+                # --- 1. CHAMADA DA COPY (Multimodal) ---
+                with st.spinner("🧠 A IA está analisando sua imagem/texto e gerando a Copy Otimizada..."):
+                    api_copy_result = call_gemini_api(description, product_type, tone, user_plan_tier, needs_video, image_b64, mime_type)
                     
-                    if "error" in api_result:
-                        st.error(f"❌ Erro na Geração da Copy: {api_result['error']}")
-                        st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
-                    else:
-                        # 2. Incrementa a contagem no Firebase/Simulação
-                        new_count = increment_ads_count(user_id, user_plan_tier)
-                        
-                        # 3. Exibição do resultado
-                        
-                        if user_plan_tier == "free" and FREE_LIMIT < 1000:
-                            st.success(f"✅ Copy Gerada! Você tem mais **{max(0, FREE_LIMIT - new_count)}** anúncios grátis nesta sessão.")
-                        else:
-                            st.success("✅ Copy Ilimitada Gerada com Sucesso!")
-                        
-                        st.markdown("---")
-                        st.subheader("Resultado Gerado Pela IA:")
+                if "error" in api_copy_result:
+                    st.error(f"❌ Erro na Geração da Copy: {api_copy_result['error']}")
+                    st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
+                    return
 
-                        # Resultados Padrão (Todos os Planos)
-                        display_result_box("🎯", "Título Gancho (Atenção)", api_result.get("titulo_gancho", "N/A"), "title_box")
-                        display_result_box("📝", "Copy Principal (AIDA)", api_result.get("copy_aida", "N/A"), "copy_box")
-                        display_result_box("📢", "Chamada para Ação (CTA)", api_result.get("chamada_para_acao", "N/A"), "cta_box")
-                        display_result_box("💡", "Ideias de Segmentação", api_result.get("segmentacao_e_ideias", "N/A"), "seg_box")
+                # --- 2. CHAMADA DA ESTRATÉGIA ---
+                with st.spinner("📈 Gerando a Estratégia de Canais e Público-Alvo..."):
+                    api_strategy_result = call_gemini_strategy(api_copy_result, user_objective, description, user_plan_tier)
 
-                        # Resultados Premium (Se solicitado e no plano correto OU se for Dev)
-                        if (is_premium and needs_video) or is_dev:
-                            st.markdown("---")
-                            st.subheader("💎 Conteúdo Premium: Estratégia de Vídeo e Campanhas")
-                            with st.container(border=True):
-                                # ROTEIRO DE VÍDEO
-                                with st.expander("🎬 Roteiro de Vídeo (Reels/TikTok)"):
-                                    display_result_box("🎬", "Gancho (Hook) de 3 Segundos", api_result.get("gancho_video", "N/A"), "hook_box")
-                                    display_result_box("🎞️", "Roteiro Completo (30s)", api_result.get("roteiro_basico", "N/A"), "roteiro_box")
-                                
-                                # SUGESTÃO DE CAMPANHAS
-                                with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
-                                    display_result_box("📈", "Títulos de Campanhas", api_result.get("sugestao_campanhas", "N/A"), "camp_box")
+                if "error" in api_strategy_result:
+                    st.warning(f"⚠️ Aviso: Falha parcial na Geração da Estratégia. O erro foi: {api_strategy_result['error']}. Exibindo resultados da Copy.")
+                
+                # 3. Incrementa a contagem
+                new_count = increment_ads_count(user_id, user_plan_tier)
+                
+                # 4. Exibição do Resultado
+                
+                st.success("✅ Estratégia e Copy Ilimitadas Geradas com Sucesso!")
+                if user_plan_tier == "free" and FREE_LIMIT < 1000:
+                    st.info(f"Você tem mais **{max(0, FREE_LIMIT - new_count)}** usos grátis.")
 
-                        # --- SEÇÃO DE FEEDBACK (BLOCO COMPLETO) ---
-                        st.markdown("---")
-                        
-                        with st.form("feedback_form", clear_on_submit=True):
-                            st.subheader("Avalie a Qualidade da Copy e Ajude a Melhorar a IA:")
+                st.markdown("---")
+                
+                # --- EXIBIÇÃO DA COPY OTIMIZADA ---
+                st.header("1. 📝 Copy Otimizada e Corrigida")
+                
+                if uploaded_file is not None:
+                    st.image(uploaded_file, caption=f"Imagem analisada: {uploaded_file.name}", use_column_width=False, width=200)
 
-                            col_rate, col_submit = st.columns([1, 4])
+                display_result_box("🎯", "Título Gancho (Atenção)", api_copy_result.get("titulo_gancho", "N/A"), "title_box")
+                display_result_box("📝", "Copy Principal (AIDA) Otimizada", api_copy_result.get("copy_aida", "N/A"), "copy_box")
+                display_result_box("📢", "Chamada para Ação (CTA)", api_copy_result.get("chamada_para_acao", "N/A"), "cta_box")
+
+
+                # --- EXIBIÇÃO DA ESTRATÉGIA DE MARKETING ---
+                st.header("2. 📈 Estratégia de Canais e Públicos")
+                
+                if "error" in api_strategy_result:
+                     st.error("❌ A Estratégia de Marketing não pôde ser gerada devido a um erro. Exibindo apenas a segmentação de base.")
+                     display_result_box("👤", "Ideias de Segmentação (Pessoas)", api_copy_result.get("segmentacao_e_ideias", "N/A"), "seg_box")
+                else:
+                    display_result_box("🌍", "Plataforma Principal Sugerida", api_strategy_result.get("plataforma_principal", "N/A"), "plataforma_box")
+                    display_result_box("👥", "Público-Alvo Detalhado", api_strategy_result.get("publico_alvo_detalhado", "N/A"), "publico_box")
+                    display_result_box("⏱️", "Estratégia de Horários de Postagem", api_strategy_result.get("estrategia_de_horarios", "N/A"), "horario_box")
+                    display_result_box("🏷️", "Sugestões de Hashtags", api_strategy_result.get("sugestoes_de_hashtags", "N/A"), "hashtag_box")
+                    display_result_box("💡", "Ideia de Criativo Complementar", api_strategy_result.get("ideia_de_criativo", "N/A"), "criativo_box")
+                    display_result_box("👤", "Ideias de Segmentação (Pessoas)", api_copy_result.get("segmentacao_e_ideias", "N/A"), "seg_box")
+
+
+                # --- EXIBIÇÃO DE RECURSOS PREMIUM ---
+                if (is_premium and needs_video) or is_dev:
+                    st.markdown("---")
+                    st.header("💎 Conteúdo Premium")
+                    
+                    col_premium_a, col_premium_b = st.columns(2)
+                    
+                    with col_premium_a:
+                        with st.expander("🎬 Roteiro de Vídeo Estratégico"):
+                            # Puxa o roteiro estratégico da API de estratégia, se existir
+                            if "roteiro_video_estrategico" in api_strategy_result:
+                                display_result_box("🎞️", "Roteiro Estratégico (30s)", api_strategy_result.get("roteiro_video_estrategico", "N/A"), "roteiro_est_box")
+                            # Puxa o roteiro básico da API de copy (fallback)
+                            elif "roteiro_basico" in api_copy_result:
+                                display_result_box("🎞️", "Roteiro Básico (30s)", api_copy_result.get("roteiro_basico", "N/A"), "roteiro_box_premium")
                             
-                            with col_rate:
-                                rating = st.select_slider(
-                                    'Gostou do Resultado?',
-                                    options=['Ruim 😭', 'Mais ou Menos 🤔', 'Bom 👍', 'Ótimo! 🚀'],
-                                    key="rating_slider_final"
-                                    )
-                                
-                            with col_submit:
-                                st.write("") # Espaçamento
-                                feedback_submitted = st.form_submit_button("Enviar Feedback", use_container_width=True)
+                            display_result_box("🎬", "Gancho (Hook) de 3 Segundos", api_copy_result.get("gancho_video", "N/A"), "hook_box_premium")
+                        
+                    with col_premium_b:
+                        with st.expander("📈 Sugestões de Campanhas A/B"):
+                             display_result_box("📈", "Títulos de Campanhas para Teste A/B", api_copy_result.get("sugestao_campanhas", "N/A"), "camp_box")
 
-                            if feedback_submitted:
-                                json_response_str = json.dumps(api_result, ensure_ascii=False, indent=2)
-                                success = save_user_feedback(user_id, rating, description, json_response_str)
+                # --- SEÇÃO DE FEEDBACK ---
+                st.markdown("---")
+                        
+                with st.form("feedback_form", clear_on_submit=True):
+                    st.subheader("Avalie a Qualidade da Copy e Ajude a Melhorar a IA:")
 
-                                if success:
-                                    st.toast('Feedback enviado! Obrigado por nos ajudar a melhorar. 🚀')
+                    col_rate, col_submit = st.columns([1, 4])
+                    
+                    with col_rate:
+                        rating = st.select_slider(
+                            'Gostou do Resultado?',
+                            options=['Ruim 😭', 'Mais ou Menos 🤔', 'Bom 👍', 'Ótimo! 🚀'],
+                            key="rating_slider_final"
+                            )
+                        
+                    with col_submit:
+                        st.write("")
+                        feedback_submitted = st.form_submit_button("Enviar Feedback", use_container_width=True)
+
+                    if feedback_submitted:
+                        json_response_str = json.dumps({
+                            "copy": api_copy_result, 
+                            "strategy": api_strategy_result
+                        }, ensure_ascii=False, indent=2)
+                        success = save_user_feedback(user_id, rating, description, json_response_str)
+
+                        if success:
+                            st.toast('Feedback enviado! Obrigado por nos ajudar a melhorar. 🚀')
