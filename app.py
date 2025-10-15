@@ -104,7 +104,7 @@ div.stButton > button:first-child:hover {
 # Certifique-se de que sua chave GEMINI_API_KEY está configurada no arquivo .streamlit/secrets.toml
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "")
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
-DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com")
+DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "viniciusp.santana07@gmail.com")
 DEVELOPER_EMAIL_CLEAN = re.sub(r'[^\w@\.\-]', '_', DEVELOPER_EMAIL.lower().strip().split('+')[0])
 
 # ----------------------------------------------------
@@ -789,7 +789,12 @@ else:
         
         col_prod, col_tone = st.columns(2)
         with col_prod:
-            product_type = st.text_input("Qual é o seu produto?", value="Curso Online de Crescimento e Monetização em Redes Sociais")
+            # ALTERAÇÃO: Removido o 'value' e adicionado 'placeholder'
+            product_type = st.text_input(
+                "Qual é o seu produto?", 
+                value="",
+                placeholder="Ex: Curso Online de Crescimento em Redes Sociais"
+            )
         with col_tone:
             tone = st.selectbox("Tom de Voz:", options=["Agressivo e Urgente", "Profissional e Informativo", "Empático e Solução de Problemas"])
 
@@ -799,9 +804,11 @@ else:
             type=["png", "jpg", "jpeg", "mp4", "mov", "webm"] # Adicionando tipos de vídeo
         )
         
+        # ALTERAÇÃO: Removido o 'value' e adicionado 'placeholder'
         user_description = st.text_area(
             "Rascunho do Conteúdo/Esboço do Anúncio (Obrigatório):", 
-            value="EX:Estou anunciando meu curso que ensina a ter 10k seguidores em 30 dias e a fazer a primeira venda em 7 dias, com depoimentos de alunos que fizeram +R$5.000.",
+            value="",
+            placeholder="Ex: Quero um anúncio que destaque meu curso que ensina a ter 10k seguidores em 30 dias e a fazer a primeira venda em 7 dias, com depoimentos de alunos que fizeram +R$5.000.",
             height=150
         )
 
@@ -936,4 +943,3 @@ if st.session_state.get('last_ad_copy') and st.session_state.get('last_ad_strate
             if save_user_feedback(user_id, feedback_rating, input_prompt, ai_response):
                 st.success("Obrigado! Seu feedback é crucial para melhorarmos a AnuncIA. 😊")
             st.experimental_set_query_params() # Limpa o feedback
-
