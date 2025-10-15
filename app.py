@@ -97,38 +97,45 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
-# A chave de API do Gemini, limite de uso gratuito e email do desenvolvedor 
-# são lidos do arquivo de segredos do Streamlit.
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "") 
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
 DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "") 
 
 
 # ----------------------------------------------------
-#               CONFIGURAÇÃO DO FIREBASE
+#               CONFIGURAÇÃO DO FIREBASE (CORRIGIDO)
 # ----------------------------------------------------
 
-# Inicialização do Firebase (Firestore e Auth)
+# Inicialização dos estados de sessão de autenticação
 if 'db' not in st.session_state:
     st.session_state['db'] = None
     st.session_state['auth'] = None
     st.session_state['firebase_app'] = None
+    st.session_state['logged_in_user_id'] = None
+    st.session_state['logged_in_user_email'] = None
+
+
+def initialize_firebase():
+    """Tenta inicializar o Firebase Admin SDK ou obtém a instância existente."""
+    
+    # Nome de instância para garantir unicidade
+    APP_NAME = "anuncia_app_instance"
     
     try:
-        # Busca a configuração do Firebase (agora na seção [firebase] do secrets.toml)
-        firebase_config = st.secrets.get("firebase", None) 
+        # 1. Tenta obter a instância, se já existir
+        app = firebase_admin.get_app(APP_NAME)
         
-        if not firebase_config or not firebase_config.get("private_key"):
-            # Se não houver config, entra em modo SIMULADO
-            st.session_state["db"] = "SIMULATED"
-            st.session_state["auth"] = "SIMULATED"
-            st.info("A contagem de anúncios usará um sistema SIMULADO: Credenciais Firebase não encontradas.")
+    except ValueError:
+        # 2. Se a instância não existir, inicializa
+        try:
+            firebase_config = st.secrets.get("firebase", None) 
             
-        else:
+            if not firebase_config or not firebase_config.get("private_key"):
+                st.info("A contagem de anúncios usará um sistema **SIMULADO**: Credenciais Firebase não encontradas.")
+                return "SIMULATED", "SIMULATED", None
+            
+            # --- Lógica de Tratamento Crítico da Chave Privada ---
             private_key_raw = firebase_config.get("private_key", "")
-            
-            # --- TRATAMENTO CRÍTICO DA CHAVE PRIVADA ---
-            # O Streamlit armazena '\n' como '\\n' literal no TOML. Precisamos corrigir isso.
             if "\\n" in private_key_raw:
                 private_key = private_key_raw.replace("\\n", "\n")
             else:
@@ -140,34 +147,23 @@ if 'db' not in st.session_state:
             }
             service_account_info["private_key"] = private_key
 
-            # Inicializa o Firebase Admin SDK
-            if not firebase_admin._apps: 
-                try:
-                    cred = credentials.Certificate(service_account_info)
-                except ValueError as ve:
-                    # Trata especificamente o erro de JSON/credencial mal formado (Comum)
-                    if "Private key must be a string or byte string" in str(ve) or "Failed to parse private key" in str(ve):
-                        raise Exception(f"ERRO FATAL DE CONFIGURAÇÃO: A chave privada do Firebase está mal formatada no secrets.toml. Erro: {ve}")
-                    else:
-                        raise ve # Lança outros erros de valor
-
-                # Inicializa com um nome de app específico
-                app = initialize_app(cred, name="anuncia_app_instance")
-                st.session_state['firebase_app'] = app
-            else:
-                app = firebase_admin.get_app("anuncia_app_instance")
-                st.session_state['firebase_app'] = app
+            # Inicializa o app
+            cred = credentials.Certificate(service_account_info)
+            app = initialize_app(cred, name=APP_NAME)
             
-            # Inicializa Firestore e Auth
-            db_client = firestore.client(app=app)
-            st.session_state["db"] = db_client 
-            st.session_state["auth"] = auth
+        except Exception as e:
+            # Trata erros durante a inicialização (e.g., chave mal formatada)
+            st.error(f"❌ Erro Crítico na Inicialização Firebase. Contagem SIMULADA: {e}")
+            return "SIMULATED", "SIMULATED", None
 
-    except Exception as e:
-        # Se houver erro na conexão (configuração errada), cai em modo simulado
-        st.error(f"❌ Erro Crítico na Conexão Firebase. Contagem SIMULADA: {e}")
-        st.session_state["db"] = "SIMULATED" 
-        st.session_state["auth"] = "SIMULATED"
+    # 3. Retorna os objetos de conexão (se o app for inicializado ou obtido com sucesso)
+    db_client = firestore.client(app=app)
+    return db_client, auth, app
+
+# Chamada principal para inicialização, armazenando no session_state (Executa apenas uma vez)
+if st.session_state['db'] is None:
+    st.session_state['db'], st.session_state['auth'], st.session_state['firebase_app'] = initialize_firebase()
+
 
 # ----------------------------------------------------
 #       FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
@@ -194,7 +190,8 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     
     # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        user_ref = st.session_state["db"].collection("users").document(user_id)
+        # Usamos o UID para buscar o documento
+        user_ref = st.session_state["db"].collection("users").document(user_id) 
         doc = user_ref.get()
         if doc.exists:
             data = doc.to_dict()
@@ -243,7 +240,6 @@ def handle_login(email: str, password: str):
         user = st.session_state['auth'].get_user_by_email(email)
         
         # NOTA: O Firebase Admin SDK NÃO verifica a senha. Apenas confirma a existência.
-        # Em produção, use o Firebase Client SDK para login.
         st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
         
         st.session_state['logged_in_user_email'] = email
@@ -310,7 +306,6 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         return {"error": "Chave de API (GEMINI_API_KEY) não configurada no secrets.toml."}
 
     # Verifica os tiers do plano
-    is_essential_or_better = (user_plan_tier in ["essential", "premium"])
     is_premium = (user_plan_tier == "premium")
 
     # 1. CONSTRUÇÃO DO PROMPT E SCHEMA
@@ -499,13 +494,6 @@ def display_result_box(icon: str, title: str, content: str, key: str):
 #               INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
-# Inicialização dos estados de sessão de autenticação
-if 'logged_in_user_id' not in st.session_state:
-    st.session_state['logged_in_user_id'] = None
-if 'logged_in_user_email' not in st.session_state:
-    st.session_state['logged_in_user_email'] = None
-
-
 st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão") # Título melhorado
 
 # --- PAINEL DE LOGIN/REGISTRO NA SIDEBAR ---
@@ -560,16 +548,8 @@ else:
     ads_used = user_data.get("ads_generated", 0)
     user_plan_tier = user_data.get("plan_tier", "free") 
     
-    # Mapeamento do tier para exibição
-    tier_display_map = {
-        "free": "Plano Grátis",
-        "essential": "Plano Essencial",
-        "premium": "Plano Premium"
-    }
-    
     is_premium = (user_plan_tier == "premium")
-    is_essential_or_better = (user_plan_tier in ["essential", "premium"])
-
+    
     st.markdown("---")
     
     # Exibição do Status (Melhorado com UX)
@@ -773,21 +753,26 @@ else:
                         with col_feedback:
                             feedback_text = ""
                             if rating == 'Ruim 😭':
-                                feedback_text = st.text_input("Diga-nos o que podemos melhorar (opcional):", key="feedback_text_input")
+                                # Mantenha a chave "feedback_text_input" para que o estado seja salvo
+                                feedback_text = st.text_input("Diga-nos o que podemos melhorar (opcional):", key="feedback_text_input") 
+                            
+                            # Condição para desabilitar o botão de envio se o rating for neutro, ou se for modo SIMULADO
+                            disable_send = st.session_state.get("db") == "SIMULATED" or rating == "Mais ou Menos 🤔"
 
                             # Botão e lógica de envio
-                            if st.button("Enviar Feedback", key="send_feedback_btn", use_container_width=True, disabled=(st.session_state.get("db") == "SIMULATED" or rating == "Mais ou Menos 🤔")):
+                            if st.button("Enviar Feedback", key="send_feedback_btn", use_container_width=True, disabled=disable_send):
                                 if st.session_state["db"] != "SIMULATED":
                                     feedback_data = {
                                         "user_id": user_id,
                                         "rating": rating,
                                         "text": feedback_text,
                                         "timestamp": firestore.SERVER_TIMESTAMP,
-                                        "input_desc": description[:100], # Salva um pedaço da descrição para referência
-                                        "result": api_result.get("copy_aida", "N/A")[:100] # Salva um pedaço do resultado
+                                        "input_desc": description[:100], 
+                                        "result": api_result.get("copy_aida", "N/A")[:100] 
                                     }
                                     # Salva em uma nova coleção 'feedback'
                                     st.session_state["db"].collection("feedback").add(feedback_data)
                                     st.success("Feedback enviado! Isso nos ajuda a melhorar a IA.")
                                 else:
+                                    # Esta linha não deve ser alcançada se o botão estiver desabilitado, mas é bom para debug.
                                     st.error("Funcionalidade de Feedback desativada em modo SIMULADO.")
