@@ -100,10 +100,11 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "") 
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
 DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "") 
-
+# Garante que o e-mail do desenvolvedor seja limpo para a verificação
+DEVELOPER_EMAIL_CLEAN = re.sub(r'[^\w@\.\-]', '_', DEVELOPER_EMAIL.lower().strip().split('+')[0])
 
 # ----------------------------------------------------
-#               CONFIGURAÇÃO DO FIREBASE (CORRIGIDO)
+#               CONFIGURAÇÃO DO FIREBASE 
 # ----------------------------------------------------
 
 # Inicialização dos estados de sessão de autenticação
@@ -122,7 +123,7 @@ def initialize_firebase():
     APP_NAME = "anuncia_app_instance"
     
     try:
-        # 1. Tenta obter a instância, se já existir (Resolve o erro inicial)
+        # 1. Tenta obter a instância, se já existir
         app = firebase_admin.get_app(APP_NAME)
         
     except ValueError:
@@ -170,7 +171,7 @@ if st.session_state['db'] is None:
 # ----------------------------------------------------
 
 def clean_email_to_doc_id(email: str) -> str:
-    """Limpa o e-mail para usar como Document ID e comparações."""
+    """Limpa o e-mail para usar como Document ID e comparações (removendo alias '+' e caracteres especiais)."""
     clean_email = email.lower().strip()
     if "+" in clean_email:
         local_part, domain = clean_email.split("@")
@@ -183,9 +184,12 @@ def clean_email_to_doc_id(email: str) -> str:
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
     
-    # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PREMIUM forçado)
-    if st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
-        return {"ads_generated": 0, "plan_tier": "premium"} 
+    # --- CORREÇÃO DE ADMIN/DEV: Força PREMIUM ILIMITADO ---
+    if st.session_state.get('logged_in_user_email'):
+        logged_email_clean = clean_email_to_doc_id(st.session_state['logged_in_user_email'])
+        if logged_email_clean == DEVELOPER_EMAIL_CLEAN:
+            # Se o e-mail logado for o e-mail do DEVELOPER_EMAIL_CLEAN (limpo), força o plano PREMIUM
+            return {"ads_generated": 0, "plan_tier": "premium"} 
     
     # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
@@ -202,6 +206,7 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
 
 def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     """Incrementa a contagem de anúncios SOMENTE se o plano for 'free'."""
+    # A contagem não é feita para planos pagos ou o DEVELOPER_EMAIL
     if current_plan_tier != "free":
         return 0 
         
@@ -224,7 +229,7 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     return new_count
 
 # ----------------------------------------------------
-#           FUNÇÕES DE AUTENTICAÇÃO (CORRIGIDO)
+#           FUNÇÕES DE AUTENTICAÇÃO
 # ----------------------------------------------------
 
 def handle_login(email: str, password: str):
@@ -234,7 +239,7 @@ def handle_login(email: str, password: str):
             st.error("Serviço de autenticação desativado. Login simulado não suportado neste modo.")
             return
 
-        # --- CORREÇÃO: Pega a instância do app nomeado ---
+        # Pega a instância do app nomeado
         app_instance = st.session_state['firebase_app']
         if app_instance is None or app_instance == "SIMULATED":
             st.error("Erro Crítico: Referência do aplicativo Firebase não encontrada ou está em modo SIMULADO.")
@@ -253,7 +258,7 @@ def handle_login(email: str, password: str):
     except firebase_admin._auth_utils.UserNotFoundError:
         st.error("Erro: Usuário não encontrado. Verifique seu e-mail e senha.")
     except Exception as e:
-        st.error(f"Erro no login: {e}") # Exibe o erro
+        st.error(f"Erro no login: {e}") 
 
 def handle_register(email: str, password: str, username: str, phone: str):
     """Cria um novo usuário, referenciando o app nomeado e salva dados adicionais no Firestore."""
@@ -262,13 +267,13 @@ def handle_register(email: str, password: str, username: str, phone: str):
             st.error("Serviço de autenticação desativado. Registro simulado não suportado neste modo.")
             return
             
-        # --- CORREÇÃO: Pega a instância do app nomeado ---
+        # Pega a instância do app nomeado
         app_instance = st.session_state['firebase_app']
         if app_instance is None or app_instance == "SIMULATED":
             st.error("Erro Crítico: Referência do aplicativo Firebase não encontrada ou está em modo SIMULADO.")
             return
 
-        # 1. Cria o usuário no Firebase Auth, usando explicitamente a instância nomeada (app=app_instance)
+        # 1. Cria o usuário no Firebase Auth, usando explicitamente a instância nomeada
         user = st.session_state['auth'].create_user(
             email=email,
             password=password,
@@ -384,7 +389,9 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
                 continue
             return {"error": f"Erro de conexão com a API: {e}"}
         except json.JSONDecodeError:
-            return {"error": "A IA não conseguiu retornar um JSON válido. Por favor, tente novamente."}
+            # Captura a resposta bruta da API para debug
+            raw_response_text = response.text if 'response' in locals() else "N/A"
+            return {"error": f"A IA não conseguiu retornar um JSON válido. Resposta da API: {raw_response_text}"}
         except Exception as e:
             return {"error": f"Erro inesperado na chamada da API: {e}"}
             
@@ -574,7 +581,10 @@ else:
     col_status, col_upgrade_link = st.columns([2, 1])
 
     with col_status:
-        if st.session_state['logged_in_user_email'] and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
+        # Verifica se o e-mail logado é o e-mail de Desenvolvedor
+        is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == DEVELOPER_EMAIL_CLEAN
+        
+        if is_dev:
             st.markdown(f"**Status:** ⭐ Acesso de Desenvolvedor (PREMIUM Ilimitado)")
         else:
             st.markdown(f"**Status:** {current_tier_info['icon']} **{current_tier_info['text']}**")
@@ -584,7 +594,7 @@ else:
                 st.markdown("Uso Ilimitado! 🎉")
 
     with col_upgrade_link:
-        if user_plan_tier == "free":
+        if user_plan_tier == "free" and not is_dev:
             # Botão de Upgrade Flutuante
             st.markdown(f"""
                 <div style="text-align: right; margin-top: 10px;" class="pro-button">
@@ -614,7 +624,7 @@ else:
             """, unsafe_allow_html=True)
             st.markdown("---")
         
-    if user_plan_tier == "free" and ads_used >= FREE_LIMIT:
+    if user_plan_tier == "free" and ads_used >= FREE_LIMIT and not is_dev:
         display_upgrade_page(user_id)
         
     else:
@@ -662,48 +672,26 @@ else:
             elif needs_video and not is_premium:
                 st.error("⚠️ **Recurso Premium:** A Geração de Roteiro de Vídeo e Campanhas é exclusiva do Plano Premium.")
             elif not GEMINI_KEY:
-                st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml.")
+                st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml. Por favor, corrija o arquivo.")
                 
-                # --- SIMULAÇÃO DE RESULTADO (SE A CHAVE DA API ESTIVER AUSENTE) ---
-                st.warning("Gerando Resultado Simulado para Teste de UI/Contagem. Se a chave estivesse OK, o resultado real apareceria abaixo.")
+                # --- LÓGICA DE SIMULAÇÃO APENAS PARA DEBUG DE CHAVE AUSENTE ---
+                st.warning("Gerando Resultado Simulado para Teste de UI/Contagem. Chave da API ausente.")
                 
                 new_count = increment_ads_count(user_id, user_plan_tier)
                 
                 st.success(f"✅ Teste de UI/Contagem Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
                 
-                st.markdown("---")
-                st.subheader("Resultado Simulado da Copy")
-                
                 sim_result = {
-                    "titulo_gancho": "NÃO COMPRE ESTE CURSO! (Antes de ver o que ele faz)",
-                    "copy_aida": "ATENÇÃO: Cansado de jargões financeiros que só complicam? Você não precisa de milhões para começar. INTERESSE: Este curso desmistifica a bolsa, usando estratégias de baixo risco, ideais para iniciantes. DESEJO: Imagine seu dinheiro trabalhando por você, sem estresse. Em pouco tempo, você terá mais confiança do que 90% dos investidores. AÇÃO: As vagas são limitadas! Clique agora no link para a matrícula e destrave o bônus de iniciante.",
-                    "chamada_para_acao": "Clique aqui e comece a investir hoje!",
-                    "segmentacao_e_ideias": "1. Pessoas com medo de investir. 2. Aposentados buscando renda extra. 3. Estudantes de economia desiludidos com a teoria."
+                    "titulo_gancho": "SIMULADO: Seu Título de Sucesso Aqui!",
+                    "copy_aida": "SIMULADO: A Copy AIDA apareceria aqui se a chave do Gemini estivesse ativa.",
+                    "chamada_para_acao": "Clique no Botão de Compra!",
+                    "segmentacao_e_ideias": "SIMULADO: Segmentação: 1. Clientes potenciais. 2. Clientes atuais. 3. Clientes frios."
                 }
-                
-                if is_premium and needs_video:
-                    sim_result['gancho_video'] = "Pare de perder tempo com vídeos longos!"
-                    sim_result['roteiro_basico'] = "Problema (0-5s): Mostra uma tela de gráfico confusa. 'Investir parece complicado, né?'. Solução/Benefício (6-20s): Transição para a tela do curso, mostrando uma interface simples. 'Com nosso método, você aprende o básico em 1 hora e aplica amanhã!'. CTA (21-30s): Link na bio. 'Inscreva-se hoje e ganhe seu primeiro guia de investimentos grátis!'."
-                    sim_result['sugestao_campanhas'] = "Campanha 1: 'Pare de Perder Dinheiro na Poupança (Método Secreto)'. Campanha 2: 'O Fim da Confusão de Investimentos'. Campanha 3: 'Aprenda a Investir Sem Ser Um Gênio da Matemática'."
 
-                
                 display_result_box("🎯", "Título Gancho (Atenção)", sim_result["titulo_gancho"], "title_sim_box")
                 display_result_box("📝", "Copy Principal (AIDA)", sim_result["copy_aida"], "copy_sim_box")
                 display_result_box("📢", "Chamada para Ação (CTA)", sim_result["chamada_para_acao"], "cta_sim_box")
                 display_result_box("💡", "Ideias de Segmentação", sim_result["segmentacao_e_ideias"], "seg_sim_box")
-                
-                if is_premium and needs_video:
-                    st.markdown("---")
-                    st.subheader("💎 Conteúdo Premium: Estratégia de Vídeo e Campanhas (SIMULADO)")
-                    with st.container(border=True): # Destaque visual PREMIUM
-                        # ROTEIRO DE VÍDEO
-                        with st.expander("🎬 Roteiro de Vídeo (Reels/TikTok)"):
-                            display_result_box("🎬", "Gancho (Hook) de 3 Segundos", sim_result["gancho_video"], "hook_sim_box")
-                            display_result_box("🎞️", "Roteiro Completo (30s)", sim_result["roteiro_basico"], "roteiro_sim_box")
-                        
-                        # SUGESTÃO DE CAMPANHAS
-                        with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
-                             display_result_box("📈", "Títulos de Campanhas", sim_result["sugestao_campanhas"], "camp_sim_box")
                 
             else:
                 # 1. Chamada REAL à API
@@ -711,6 +699,7 @@ else:
                     api_result = call_gemini_api(description, product_type, tone, user_plan_tier, needs_video)
                     
                     if "error" in api_result:
+                        # Exibirá o erro de JSON se o modelo não retornar o formato correto (incluindo o texto da API para debug)
                         st.error(f"❌ Erro na Geração da Copy: {api_result['error']}")
                         st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
                     else:
@@ -718,7 +707,7 @@ else:
                         new_count = increment_ads_count(user_id, user_plan_tier)
                         
                         # 3. Exibição do resultado
-                        # Mensagem de sucesso (e aviso de limite para o Free)
+                        
                         if user_plan_tier == "free":
                             st.success(f"✅ Copy Gerada! Você tem mais **{max(0, FREE_LIMIT - new_count)}** anúncios grátis nesta sessão.")
                         else:
@@ -747,7 +736,7 @@ else:
                                 with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
                                     display_result_box("📈", "Títulos de Campanhas", api_result.get("sugestao_campanhas", "N/A"), "camp_box")
 
-                        # --- SEÇÃO DE FEEDBACK (Nova) ---
+                        # --- SEÇÃO DE FEEDBACK ---
                         st.markdown("---")
                         st.subheader("Avalie a Qualidade da Copy:")
 
@@ -759,7 +748,6 @@ else:
                                 key="rating_slider"
                             )
                         
-                        # Formulário/Caixa de Feedback
                         with col_feedback:
                             feedback_text = ""
                             if rating == 'Ruim 😭':
@@ -767,7 +755,6 @@ else:
                             
                             disable_send = st.session_state.get("db") == "SIMULATED" or rating == "Mais ou Menos 🤔"
 
-                            # Botão e lógica de envio
                             if st.button("Enviar Feedback", key="send_feedback_btn", use_container_width=True, disabled=disable_send):
                                 if st.session_state["db"] != "SIMULATED":
                                     feedback_data = {
