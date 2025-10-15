@@ -1,7 +1,8 @@
 streamlit
-firebase-admin
 openai
-
-
-
+requests
+firebase_admin
+google-cloud-firestore
+# Se for usar login com Google/Email:
+# st-firebase
 
