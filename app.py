@@ -10,6 +10,7 @@ from google.cloud.firestore import Client
 from typing import Dict, Any, Union
 import re
 import base64
+from io import BytesIO
 
 # --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO ---
 st.set_page_config(page_title="✨ AnuncIA - Gerador de Estratégia de Marketing", layout="wide")
@@ -104,7 +105,7 @@ div.stButton > button:first-child:hover {
 # Certifique-se de que sua chave GEMINI_API_KEY está configurada no arquivo .streamlit/secrets.toml
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "")
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
-DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "viniciusp.santana07@gmail.com")
+DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com")
 DEVELOPER_EMAIL_CLEAN = re.sub(r'[^\w@\.\-]', '_', DEVELOPER_EMAIL.lower().strip().split('+')[0])
 
 # ----------------------------------------------------
@@ -115,7 +116,13 @@ def file_to_base64(uploaded_file):
     """Converte um objeto FileUploader do Streamlit para Base64."""
     if uploaded_file is not None:
         # A API Gemini aceita base64 para mídias in-line
-        return base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
+        file_bytes = uploaded_file.getvalue()
+        # Adiciona um check de tamanho para evitar sobrecarga (Max 200MB)
+        if len(file_bytes) > 200 * 1024 * 1024:
+            st.warning("⚠️ O arquivo é muito grande (Máx. 200MB). Apenas a descrição textual será analisada.")
+            return None
+            
+        return base64.b64encode(file_bytes).decode("utf-8")
     return None
 
 def get_mime_type(uploaded_file):
@@ -126,7 +133,7 @@ def get_mime_type(uploaded_file):
 
 
 # ----------------------------------------------------
-#                CONFIGURAÇÃO DO FIREBASE (MANTIDO)
+#                CONFIGURAÇÃO DO FIREBASE (COM CORREÇÃO DE CHAVE PRIVADA)
 # ----------------------------------------------------
 
 if 'db' not in st.session_state:
@@ -152,10 +159,17 @@ def initialize_firebase():
                 return "SIMULATED", "SIMULATED", None
             
             private_key_raw = firebase_config.get("private_key", "")
-            if "\\n" in private_key_raw:
-                private_key = private_key_raw.replace("\\n", "\n")
+            
+            # --- CORREÇÃO DE CHAVE PRIVADA PARA EVITAR ERRO DE PARSING ---
+            # O Streamlit/Python pode ter problemas com a formatação da string 'private_key'.
+            # Esta linha força a substituição de "\\n" (escapado no TOML) por "\n" (quebra de linha real).
+            if private_key_raw.startswith('-----BEGIN PRIVATE KEY-----') and "\\n" not in private_key_raw:
+                 # Se a chave for colada diretamente com quebras de linha reais (não recomendado no cloud)
+                private_key = private_key_raw 
             else:
-                private_key = private_key_raw
+                # O padrão esperado (escapado no secrets.toml / Streamlit Cloud)
+                private_key = private_key_raw.replace("\\n", "\n")
+            # -------------------------------------------------------------
             
             service_account_info = {
                 k: v for k, v in firebase_config.items() if k not in ["private_key"]
@@ -163,10 +177,12 @@ def initialize_firebase():
             service_account_info["private_key"] = private_key
             service_account_info["type"] = service_account_info.get("type", "service_account")
 
+            # Cria um objeto JSON (Dict) para a credencial e usa credentials.Certificate
             cred = credentials.Certificate(service_account_info)
             app = initialize_app(cred, name=APP_NAME)
             
         except Exception as e:
+            # Captura o erro, incluindo o de parsing de certificado
             st.error(f"❌ Erro Crítico na Inicialização Firebase. Contagem SIMULADA: {e}")
             return "SIMULATED", "SIMULATED", None
 
@@ -301,15 +317,19 @@ def update_user_plan(target_email: str, new_plan: str) -> bool:
 
 # --- FUNÇÕES DE AUTENTICAÇÃO (MANTIDAS) ---
 def handle_login(email: str, password: str):
-    # ... (implementação da função login - MANTIDA)
     try:
         if st.session_state['auth'] == "SIMULATED":
             st.error("Serviço de autenticação desativado.")
             return
 
         app_instance = st.session_state['firebase_app']
+        # Nota: O Firebase Admin SDK não tem uma função de "login com senha" diretamente.
+        # Ele é usado para gerenciar usuários no back-end. Para uma app real, 
+        # você usaria o Client SDK (ex: JS/Web) para login e verificaria o token ID aqui.
+        # Aqui, estamos simulando a autenticação via Admin SDK apenas para obter o UID.
         user = st.session_state['auth'].get_user_by_email(email, app=app_instance)
         
+        # AVISO: Em produção, você precisa de um mecanismo para validar a senha.
         st.warning("Aviso: Login efetuado. Verificação de senha simulada (Admin SDK).")
         
         st.session_state['logged_in_user_email'] = email
@@ -323,7 +343,6 @@ def handle_login(email: str, password: str):
         st.error(f"Erro no login: {e}")
 
 def handle_register(email: str, password: str, username: str, phone: str):
-    # ... (implementação da função register - MANTIDA)
     try:
         if st.session_state['auth'] == "SIMULATED":
             st.error("Serviço de autenticação desativado.")
@@ -366,7 +385,7 @@ def handle_logout():
 
 
 # ----------------------------------------------------
-#            FUNÇÕES DE CHAMADA DA API (ATUALIZADAS)
+#            FUNÇÕES DE CHAMADA DA API (MANTIDAS)
 # ----------------------------------------------------
 
 def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool, media_b64: str, mime_type: str) -> Union[Dict, str]:
@@ -942,4 +961,4 @@ if st.session_state.get('last_ad_copy') and st.session_state.get('last_ad_strate
             
             if save_user_feedback(user_id, feedback_rating, input_prompt, ai_response):
                 st.success("Obrigado! Seu feedback é crucial para melhorarmos a AnuncIA. 😊")
-            st.experimental_set_query_params() # Limpa o feedback
+            # Não é mais necessário st.experimental_set_query_params()
