@@ -47,12 +47,24 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
     box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
     transition: all 0.3s ease-in-out;
 }
+
+/* Estilo para o botão PRO */
+a[href*="LINK_PARA_PAGAMENTO"] button {
+    background-color: #52b2ff !important;
+    color: white !important;
+    border: none !important;
+    padding: 10px 20px !important;
+    border-radius: 8px !important;
+    font-size: 16px !important;
+    cursor: pointer !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") # Chave corrigida
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") # Chave para testes futuros
 FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
 DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "")
 
@@ -71,8 +83,16 @@ if 'db' not in st.session_state:
         if not firebase_config:
             st.warning("⚠️ Configuração [firebase] não encontrada. O app funcionará no MODO OFFLINE/SIMULAÇÃO.")
         else:
-            private_key = firebase_config.get("private_key", "").replace("\\n", "\n")
+            # Pega a private_key, que pode estar em formato de string com \n ou aspas triplas
+            private_key_raw = firebase_config.get("private_key", "")
             
+            # Limpa quebras de linha (necessário se não for formatado com aspas triplas no toml)
+            if "\\n" in private_key_raw:
+                private_key = private_key_raw.replace("\\n", "\n")
+            else:
+                private_key = private_key_raw
+            
+            # Constrói o dicionário de credenciais
             service_account_info = {
                 k: v for k, v in firebase_config.items() if k not in ["private_key"]
             }
@@ -81,13 +101,15 @@ if 'db' not in st.session_state:
             # 2. Inicializar o Firebase Admin SDK (só se não estiver inicializado)
             if not firebase_admin._apps: 
                 cred = credentials.Certificate(service_account_info)
-                initialize_app(cred, name="anuncia_app")
+                # Usa um nome único para o app Firebase
+                initialize_app(cred, name="anuncia_app_instance")
             
             # 3. Conectar ao Firestore
-            db_client = firestore.client(app=firebase_admin.get_app("anuncia_app"))
+            db_client = firestore.client(app=firebase_admin.get_app("anuncia_app_instance"))
             st.session_state["db"] = db_client 
             
     except Exception as e:
+        # st.error(f"Erro ao inicializar Firebase: {e}") # Descomente para debug avançado
         st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
         st.session_state["db"] = "SIMULATED" 
         
@@ -101,8 +123,10 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     # 1. VERIFICAÇÃO DE DESENVOLVEDOR (WHITELIST)
     dev_email_clean = DEVELOPER_EMAIL.lower()
     
-    # O user_id é o e-mail limpo e formatado como document ID
-    if user_id.lower() == re.sub(r'[^\w\-@\.]', '_', dev_email_clean):
+    # O user_id é o e-mail limpo e formatado como document ID (sem caracteres especiais, exceto @ . -)
+    # Garante que, se o e-mail do DEV for usado, ele sempre retorne 'pro'
+    dev_doc_id = re.sub(r'[^\w\-@\.]', '_', dev_email_clean)
+    if user_id.lower() == dev_doc_id:
         # Retorna o plano 'pro' imediatamente, ignorando o Firebase
         return {"ads_generated": 0, "plan": "pro"} 
     
@@ -114,6 +138,7 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
             return doc.to_dict()
     
     # 3. MODO SIMULADO (Fallback)
+    # Usa st.session_state para simular dados persistentes por sessão
     return st.session_state.get(f"user_{user_id}", {"ads_generated": 0, "plan": "free"})
 
 def increment_ads_count(user_id: str, current_plan: str) -> int:
@@ -124,8 +149,12 @@ def increment_ads_count(user_id: str, current_plan: str) -> int:
     user_data = get_user_data(user_id)
     new_count = user_data.get("ads_generated", 0) + 1
     
+    # Se o usuário é PRO por ser DEV, não incrementa (já retorna 0 acima, mas redundância)
+    if user_data.get("plan") == "pro":
+         return 0
+
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        # Modo Firebase
+        # Modo Firebase (Atualiza o documento)
         user_ref = st.session_state["db"].collection("users").document(user_id)
         user_ref.set({
             "ads_generated": new_count,
@@ -140,7 +169,7 @@ def increment_ads_count(user_id: str, current_plan: str) -> int:
     return new_count
 
 # ----------------------------------------------------
-#             FUNÇÕES DE CHAMADA DA API (GEMINI/OPENAI)
+#           FUNÇÕES DE CHAMADA DA API (GEMINI/OPENAI)
 # ----------------------------------------------------
 
 def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_user: bool, needs_video: bool) -> Union[Dict, str]:
@@ -148,7 +177,8 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_
     
     api_key = GEMINI_KEY # Usando a chave GEMINI_API_KEY
     if not api_key:
-        return {"error": "Chave de API (GEMINI_API_KEY) não configurada."}
+        # Retorna JSON de erro simulado/estático para não travar o app
+        return {"error": "Chave de API (GEMINI_API_KEY) não configurada no secrets.toml."}
 
     # 1. CONSTRUÇÃO DO PROMPT E SCHEMA (Dinâmico para o Plano PRO)
     
@@ -224,7 +254,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_
     return {"error": "Não foi possível conectar após várias tentativas."}
 
 # ----------------------------------------------------
-#              FUNÇÕES DE EXIBIÇÃO DA UI
+#           FUNÇÕES DE EXIBIÇÃO DA UI
 # ----------------------------------------------------
 
 def display_upgrade_page(user_id: str):
@@ -305,27 +335,28 @@ st.title("✨ AnuncIA — O Gerador de Anúncios Inteligente")
 with st.sidebar:
     st.markdown("## 🔒 Login/Acesso")
     email_input = st.text_input("Seu E-mail (Para controle de uso)", 
-                                placeholder="seu@email.com")
+                                 placeholder="seu@email.com")
     
     if st.button("Acessar / Simular Login", use_container_width=True):
-        if "@" in email_input:
+        if "@" in email_input and "." in email_input:
             # 1. Aplica a lógica anti-abuso de e-mail alias (ignora '+alias')
-            clean_email = email_input
-            if "+" in email_input:
-                local_part, domain = email_input.split("@")
+            clean_email = email_input.lower().strip()
+            if "+" in clean_email:
+                local_part, domain = clean_email.split("@")
                 local_part = local_part.split("+")[0]
                 clean_email = f"{local_part}@{domain}"
             
             # 2. Cria um ID limpo para usar como Document ID no Firestore
-            user_doc_id = re.sub(r'[^\w\-@\.]', '_', clean_email)
+            # Mantém apenas letras, números, @, hifens e pontos. Substitui outros por "_"
+            user_doc_id = re.sub(r'[^\w@\.\-]', '_', clean_email)
             
             st.session_state['logged_in_user_id'] = user_doc_id
-            st.success(f"Acesso Liberado: {clean_email}")
+            st.success(f"Acesso Liberado para: **{clean_email}**")
         else:
-            st.error("Por favor, insira um e-mail válido.")
+            st.error("Por favor, insira um e-mail válido (ex: 'nome@dominio.com').")
 
 # ----------------------------------------------------
-#                  INTERFACE PRINCIPAL
+#               INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
 if not st.session_state['logged_in_user_id']:
@@ -393,10 +424,48 @@ else:
                 st.error("⚠️ **Recurso PRO:** A Geração de Roteiro de Vídeo é exclusiva do Plano PRO. Por favor, desmarque a opção ou faça o upgrade.")
             elif not GEMINI_KEY:
                 st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml.")
+                
+                # SIMULAÇÃO DE RESULTADO JÁ QUE A CHAVE ESTÁ AUSENTE
+                st.warning("Gerando Resultado Simulado para Teste de UI/Contagem. Se a chave estivesse OK, o resultado real apareceria abaixo.")
+                
+                # 1. Incrementa a contagem mesmo com erro de API (para testar o limite)
+                new_count = increment_ads_count(user_id, user_plan)
+                
+                # 2. Exibe o resultado simulado
+                st.success(f"✅ Teste de UI/Contagem Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
+                
+                st.markdown("---")
+                st.subheader("Resultado Simulado da Copy")
+                
+                sim_result = {
+                    "titulo_gancho": "NÃO COMPRE ESTE CURSO! (Antes de ver o que ele faz)",
+                    "copy_aida": "ATENÇÃO: Cansado de jargões financeiros que só complicam? Você não precisa de milhões para começar. INTERESSE: Este curso desmistifica a bolsa, usando estratégias de baixo risco, ideais para iniciantes. DESEJO: Imagine seu dinheiro trabalhando por você, sem estresse. Em pouco tempo, você terá mais confiança do que 90% dos investidores. AÇÃO: As vagas são limitadas! Clique agora no link para a matrícula e destrave o bônus de iniciante.",
+                    "chamada_para_acao": "Clique aqui e comece a investir hoje!",
+                    "segmentacao_e_ideias": "1. Pessoas com medo de investir. 2. Aposentados buscando renda extra. 3. Estudantes de economia desiludidos com a teoria."
+                }
+                
+                if is_pro_user and needs_video:
+                    sim_result['gancho_video'] = "Pare de perder tempo com vídeos longos!"
+                    sim_result['roteiro_basico'] = "Problema (0-5s): Mostra uma tela de gráfico confusa. 'Investir parece complicado, né?'. Solução/Benefício (6-20s): Transição para a tela do curso, mostrando uma interface simples. 'Com nosso método, você aprende o básico em 1 hora e aplica amanhã!'. CTA (21-30s): Link na bio. 'Inscreva-se hoje e ganhe seu primeiro guia de investimentos grátis!'"
+
+                
+                display_result_box("Título", sim_result["titulo_gancho"], "title_sim_box")
+                display_result_box("Copy AIDA", sim_result["copy_aida"], "copy_sim_box")
+                display_result_box("CTA", sim_result["chamada_para_acao"], "cta_sim_box")
+                display_result_box("Segmentação", sim_result["segmentacao_e_ideias"], "seg_sim_box")
+                
+                if is_pro_user and needs_video:
+                    st.markdown("---")
+                    st.subheader("🎥 Roteiro PRO de Vídeo (SIMULADO)")
+                    with st.expander("Clique para ver o Roteiro Completo"):
+                        st.markdown("##### Gancho (Hook) de 3 Segundos")
+                        display_result_box("Gancho Video", sim_result["gancho_video"], "hook_sim_box")
+                        st.markdown("##### Roteiro Completo (30s)")
+                        display_result_box("Roteiro", sim_result["roteiro_basico"], "roteiro_sim_box")
+                
             else:
+                # 1. Chamada REAL à API (só se a chave estiver configurada)
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
-                    
-                    # 1. Chamada REAL à API
                     api_result = call_gemini_api(description, product_type, tone, is_pro_user, needs_video)
                     
                     if "error" in api_result:
