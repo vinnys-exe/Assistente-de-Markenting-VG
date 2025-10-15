@@ -2,13 +2,13 @@ import streamlit as st
 import os
 import time
 import requests
-import json
+import json  # Garantindo o import para usar no feedback
 import firebase_admin
 from firebase_admin import credentials, initialize_app, firestore
-from firebase_admin import auth 
+from firebase_admin import auth
 from google.cloud.firestore import Client
 from typing import Dict, Any, Union
-import re 
+import re
 import base64
 
 # --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO (V5.0 - PLANOS E RERUN CORRIGIDOS) ---
@@ -83,7 +83,7 @@ div.stButton > button:first-child:hover {
     font-size: 16px !important;
     cursor: pointer !important;
     font-weight: bold;
-    box-shadow: 0 4px 8px rgba(255, 87, 34, 0.3); 
+    box-shadow: 0 4px 8px rgba(255, 87, 34, 0.3);
     transition: all 0.2s;
 }
 .pro-button a button:hover {
@@ -101,14 +101,14 @@ div.stButton > button:first-child:hover {
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
-GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "") 
+GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "")
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
-DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com") 
+DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com")
 # Garante que o e-mail do desenvolvedor seja limpo para a verificação
 DEVELOPER_EMAIL_CLEAN = re.sub(r'[^\w@\.\-]', '_', DEVELOPER_EMAIL.lower().strip().split('+')[0])
 
 # ----------------------------------------------------
-#               CONFIGURAÇÃO DO FIREBASE (IMUTÁVEL)
+#                CONFIGURAÇÃO DO FIREBASE (IMUTÁVEL)
 # ----------------------------------------------------
 
 if 'db' not in st.session_state:
@@ -127,7 +127,7 @@ def initialize_firebase():
         app = firebase_admin.get_app(APP_NAME)
     except ValueError:
         try:
-            firebase_config = st.secrets.get("firebase", None) 
+            firebase_config = st.secrets.get("firebase", None)
             
             if not firebase_config or not firebase_config.get("private_key"):
                 st.info("A contagem de anúncios usará um sistema **SIMULADO**: Credenciais Firebase não encontradas.")
@@ -159,7 +159,7 @@ if st.session_state['db'] is None:
 
 
 # ----------------------------------------------------
-#       FUNÇÕES DE CONTROLE DE USO E PLANO
+#       FUNÇÕES DE CONTROLE DE USO E PLANO
 # ----------------------------------------------------
 
 def clean_email_to_doc_id(email: str) -> str:
@@ -183,16 +183,16 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
         
         if logged_email_clean == clean_email_to_doc_id(DEVELOPER_EMAIL):
             # Se o e-mail for o Admin, força o plano PREMIUM (ilimitado)
-            return {"ads_generated": 0, "plan_tier": "premium"} 
+            return {"ads_generated": 0, "plan_tier": "premium"}
     
     # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        user_ref = st.session_state["db"].collection("users").document(user_id) 
+        user_ref = st.session_state["db"].collection("users").document(user_id)
         doc = user_ref.get()
         if doc.exists:
             data = doc.to_dict()
             # Lê o plan_tier do Firestore (que seria atualizado pelo Webhook de pagamento)
-            data['plan_tier'] = data.get('plan_tier', 'free') 
+            data['plan_tier'] = data.get('plan_tier', 'free')
             return data
     
     # 3. MODO SIMULADO (Fallback)
@@ -203,7 +203,7 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     """Incrementa a contagem de anúncios SOMENTE se o plano for 'free'."""
     # ESSENCIAL E PREMIUM SÃO ILIMITADOS
     if current_plan_tier != "free":
-        return 0 
+        return 0
         
     user_data = get_user_data(user_id)
     new_count = user_data.get("ads_generated", 0) + 1
@@ -221,8 +221,39 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
         
     return new_count
 
+def save_user_feedback(user_id: str, rating: str, input_prompt: str, ai_response: str):
+    """Salva o feedback do usuário no Firestore para melhoria da IA."""
+    
+    # 1. MODO FIREBASE
+    if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+        feedback_ref = st.session_state["db"].collection("feedback").document() # Gera um ID automático
+        
+        # Converte o rating de texto para um valor numérico para facilitar análises
+        rating_map = {'Ruim 😭': 1, 'Mais ou Menos 🤔': 2, 'Bom 👍': 3, 'Ótimo! 🚀': 4}
+        rating_score = rating_map.get(rating, 0)
+        
+        try:
+            feedback_ref.set({
+                "user_id": user_id,
+                "rating_text": rating,
+                "rating_score": rating_score,
+                "input_prompt": input_prompt,
+                "ai_response_json": ai_response, # Salva o JSON completo (útil para debug)
+                "timestamp": firestore.SERVER_TIMESTAMP,
+            })
+            return True
+        except Exception as e:
+            st.error(f"Erro ao salvar feedback no Firestore: {e}")
+            return False
+            
+    # 2. MODO SIMULADO (Apenas loga a ação)
+    else:
+        # st.info(f"Feedback Salvo (SIMULADO): {rating}") # Opcional: mostrar log para o usuário
+        return True
+
+
 # ----------------------------------------------------
-#           FUNÇÕES DE AUTENTICAÇÃO (st.rerun CORRIGIDO)
+#            FUNÇÕES DE AUTENTICAÇÃO (st.rerun CORRIGIDO)
 # ----------------------------------------------------
 
 def handle_login(email: str, password: str):
@@ -233,7 +264,7 @@ def handle_login(email: str, password: str):
             return
 
         app_instance = st.session_state['firebase_app']
-        user = st.session_state['auth'].get_user_by_email(email, app=app_instance) 
+        user = st.session_state['auth'].get_user_by_email(email, app=app_instance)
         
         st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
         
@@ -245,7 +276,7 @@ def handle_login(email: str, password: str):
     except firebase_admin._auth_utils.UserNotFoundError:
         st.error("Erro: Usuário não encontrado. Verifique seu e-mail e senha.")
     except Exception as e:
-        st.error(f"Erro no login: {e}") 
+        st.error(f"Erro no login: {e}")
 
 def handle_register(email: str, password: str, username: str, phone: str):
     """Cria um novo usuário."""
@@ -260,7 +291,7 @@ def handle_register(email: str, password: str, username: str, phone: str):
             email=email,
             password=password,
             display_name=username,
-            app=app_instance 
+            app=app_instance
         )
 
         if st.session_state["db"] != "SIMULATED":
@@ -269,10 +300,10 @@ def handle_register(email: str, password: str, username: str, phone: str):
                 "username": username,
                 "phone": phone if phone else None,
                 "created_at": firestore.SERVER_TIMESTAMP,
-                "plan_tier": "free", 
+                "plan_tier": "free",
                 "ads_generated": 0
             })
-        
+            
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
         st.success(f"Conta criada com sucesso! Bem-vindo(a), {username}.")
@@ -290,7 +321,7 @@ def handle_logout():
     st.rerun() # <-- CORREÇÃO
 
 # ----------------------------------------------------
-#           FUNÇÕES DE CHAMADA DA API (IMUTÁVEL)
+#            FUNÇÕES DE CHAMADA DA API (IMUTÁVEL)
 # ----------------------------------------------------
 
 def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool) -> Union[Dict, str]:
@@ -304,11 +335,11 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
     is_premium_feature = (user_plan_tier == "premium" and needs_video)
     
     system_instruction = f"""
-    Você é um Copywriter de elite, especializado em Marketing Digital e Vendas Diretas. 
+    Você é um Copywriter de elite, especializado em Marketing Digital e Vendas Diretas.
     Sua missão é gerar um anúncio altamente persuasivo e focado em conversão.
     
     Instruções de Tom: O tom de voz deve ser {tone}.
-    Instruções de Estrutura: Use o Framework AIDA (Atenção, Interesse, Desejo, Ação). 
+    Instruções de Estrutura: Use o Framework AIDA (Atenção, Interesse, Desejo, Ação).
     A copy deve ser concisa, focar no benefício do cliente e incluir gatilhos de escassez/urgência/prova social.
     
     O produto é um {product_type}.
@@ -342,7 +373,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         "config": {
             "responseMimeType": "application/json",
             "responseSchema": output_schema,
-            "temperature": 0.7 
+            "temperature": 0.7
         }
     }
 
@@ -351,7 +382,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
     # 3. CHAMADA HTTP (omiti a lógica de retry para brevidade, mas ela estava correta)
     try:
         response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-        response.raise_for_status() 
+        response.raise_for_status()
         
         result = response.json()
         json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
@@ -367,7 +398,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         return {"error": f"Erro inesperado na chamada da API: {e}"}
 
 # ----------------------------------------------------
-#           FUNÇÕES DE EXIBIÇÃO DA UI
+#            FUNÇÕES DE EXIBIÇÃO DA UI
 # ----------------------------------------------------
 
 def display_upgrade_page(user_id: str):
@@ -411,7 +442,7 @@ def display_upgrade_page(user_id: str):
             f"""
             <div class="plan-card" style="background-color: #e0f2ff; border: 2px solid #00bcd4;">
                 <h4 style="color: #00bcd4; text-align: center;">Plano Essencial</h4>
-                 <div style="text-align: center;">
+                   <div style="text-align: center;">
                     <p class="price-tag" style="color: #00bcd4;">R$ 19,90</p>
                     <p>por mês</p>
                 </div>
@@ -438,7 +469,7 @@ def display_upgrade_page(user_id: str):
             f"""
             <div class="plan-card plan-highlight">
                 <h4 style="color: #ff5722; text-align: center;">🏆 Plano Premium</h4>
-                 <div style="text-align: center;">
+                   <div style="text-align: center;">
                     <p class="strike-through">De R$ 49,90</p>
                     <p class="price-tag" style="color: #ff5722;">R$ 34,90</p>
                     <p>por mês **(Mais Vantajoso)**</p>
@@ -477,10 +508,10 @@ def display_result_box(icon: str, title: str, content: str, key: str):
         )
 
 # ----------------------------------------------------
-#               INTERFACE PRINCIPAL
+#                INTERFACE PRINCIPAL
 # ----------------------------------------------------
 
-st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão") 
+st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão")
 
 # --- PAINEL DE LOGIN/REGISTRO NA SIDEBAR ---
 with st.sidebar:
@@ -530,7 +561,7 @@ else:
     user_id = st.session_state['logged_in_user_id']
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
-    user_plan_tier = user_data.get("plan_tier", "free") 
+    user_plan_tier = user_data.get("plan_tier", "free")
     
     # Aplicação dos benefícios
     is_essential_or_premium = (user_plan_tier in ["essential", "premium"])
@@ -597,8 +628,8 @@ else:
             st.subheader("🛠️ Crie Seu Anúncio Profissional")
             
             description = st.text_area(
-                "Descreva seu produto (máximo 800 caracteres):", 
-                placeholder="""Ex: 'Um curso online para iniciantes que ensina a investir na bolsa com pouco dinheiro, usando estratégias de baixo risco e zero jargão técnico.'\n\nInclua: Nome do Produto, Público-alvo, Benefício principal e Oferta (preço/promoção).""", 
+                "Descreva seu produto (máximo 800 caracteres):",
+                placeholder="""Ex: 'Um curso online para iniciantes que ensina a investir na bolsa com pouco dinheiro, usando estratégias de baixo risco e zero jargão técnico.'\n\nInclua: Nome do Produto, Público-alvo, Benefício principal e Oferta (preço/promoção).""",
                 max_chars=800
             )
             
@@ -607,18 +638,18 @@ else:
                 
                 with col_type:
                     product_type = st.selectbox(
-                        "Tipo de Produto:", 
+                        "Tipo de Produto:",
                         ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"]
                     )
                 
                 with col_tone:
                       tone = st.selectbox(
-                          "Tom de Voz:", 
-                          ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
+                            "Tom de Voz:",
+                            ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
                       )
 
             needs_video = st.checkbox(
-                "🎬 Gerar Roteiro de Vídeo (Reels/TikTok) e Sugestão de Campanhas - Exclusivo Plano Premium", 
+                "🎬 Gerar Roteiro de Vídeo (Reels/TikTok) e Sugestão de Campanhas - Exclusivo Plano Premium",
                 value=False,
                 disabled=(not is_premium) # Desabilitado se não for Premium
             )
@@ -634,24 +665,26 @@ else:
             elif not GEMINI_KEY:
                 st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml. Por favor, corrija o arquivo.")
                 
-                # ... (resto do bloco de erro/simulação omitido por brevidade, mas deve permanecer no seu código)
-                st.warning("Gerando Resultado Simulado para Teste de UI/Contagem. Chave da API ausente.")
-                
+                # SIMULAÇÃO DE RESULTADO (Fallback)
                 new_count = increment_ads_count(user_id, user_plan_tier)
                 
                 st.success(f"✅ Teste de UI/Contagem Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
                 
-                sim_result = {
+                api_result = { # Usamos 'api_result' para poder alimentar o formulário de feedback (se for o caso)
                     "titulo_gancho": "SIMULADO: Seu Título de Sucesso Aqui!",
                     "copy_aida": "SIMULADO: A Copy AIDA apareceria aqui se a chave do Gemini estivesse ativa.",
                     "chamada_para_acao": "Clique no Botão de Compra!",
-                    "segmentacao_e_ideias": "SIMULADO: Segmentação: 1. Clientes potenciais. 2. Clientes atuais. 3. Clientes frios."
+                    "segmentacao_e_ideias": "SIMULADO: Segmentação: 1. Clientes potenciais. 2. Clientes atuais. 3. Clientes frios.",
+                    "gancho_video": "SIMULADO: HOOK de 3s (Exclusivo Premium)",
+                    "roteiro_basico": "SIMULADO: Roteiro (Exclusivo Premium)",
+                    "sugestao_campanhas": "SIMULADO: Campanhas (Exclusivo Premium)"
                 }
 
-                display_result_box("🎯", "Título Gancho (Atenção)", sim_result["titulo_gancho"], "title_sim_box")
-                display_result_box("📝", "Copy Principal (AIDA)", sim_result["copy_aida"], "copy_sim_box")
-                display_result_box("📢", "Chamada para Ação (CTA)", sim_result["chamada_para_acao"], "cta_sim_box")
-                display_result_box("💡", "Ideias de Segmentação", sim_result["segmentacao_e_ideias"], "seg_sim_box")
+                display_result_box("🎯", "Título Gancho (Atenção)", api_result["titulo_gancho"], "title_sim_box")
+                display_result_box("📝", "Copy Principal (AIDA)", api_result["copy_aida"], "copy_sim_box")
+                display_result_box("📢", "Chamada para Ação (CTA)", api_result["chamada_para_acao"], "cta_sim_box")
+                display_result_box("💡", "Ideias de Segmentação", api_result["segmentacao_e_ideias"], "seg_sim_box")
+                
             else:
                 # 1. Chamada REAL à API
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
@@ -694,36 +727,31 @@ else:
                                 with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
                                     display_result_box("📈", "Títulos de Campanhas", api_result.get("sugestao_campanhas", "N/A"), "camp_box")
 
-                        # --- SEÇÃO DE FEEDBACK ---
+                        # --- SEÇÃO DE FEEDBACK (NOVO BLOCO) ---
                         st.markdown("---")
-                        st.subheader("Avalie a Qualidade da Copy:")
-
-                        col_rate, col_feedback = st.columns([1, 4])
-                        with col_rate:
-                            rating = st.select_slider(
-                                'Gostou do Resultado?',
-                                options=['Ruim 😭', 'Mais ou Menos 🤔', 'Bom 👍', 'Ótimo! 🚀'],
-                                key="rating_slider"
-                            )
                         
-                        with col_feedback:
-                            feedback_text = ""
-                            if rating == 'Ruim 😭':
-                                feedback_text = st.text_input("Diga-nos o que podemos melhorar (opcional):", key="feedback_text_input") 
-                            
-                            disable_send = st.session_state.get("db") == "SIMULATED" or rating == "Mais ou Menos 🤔"
+                        # Adiciona um novo form para o feedback, pois ele precisa de submissão separada.
+                        with st.form("feedback_form", clear_on_submit=True):
+                            st.subheader("Avalie a Qualidade da Copy e Ajude a Melhorar a IA:")
 
-                            if st.button("Enviar Feedback", key="send_feedback_btn", use_container_width=True, disabled=disable_send):
-                                if st.session_state["db"] != "SIMULATED":
-                                    feedback_data = {
-                                        "user_id": user_id,
-                                        "rating": rating,
-                                        "text": feedback_text,
-                                        "timestamp": firestore.SERVER_TIMESTAMP,
-                                        "input_desc": description[:100], 
-                                        "result": api_result.get("copy_aida", "N/A")[:100] 
-                                    }
-                                    st.session_state["db"].collection("feedback").add(feedback_data)
-                                    st.success("Feedback enviado! Isso nos ajuda a melhorar a IA.")
-                                else:
-                                    st.error("Funcionalidade de Feedback desativada em modo SIMULADO.")
+                            col_rate, col_submit = st.columns([1, 4])
+                            
+                            with col_rate:
+                                rating = st.select_slider(
+                                    'Gostou do Resultado?',
+                                    options=['Ruim 😭', 'Mais ou Menos 🤔', 'Bom 👍', 'Ótimo! 🚀'],
+                                    key="rating_slider_final"
+                                    )
+                                
+                            with col_submit:
+                                st.write("") # Espaçamento
+                                feedback_submitted = st.form_submit_button("Enviar Feedback", use_container_width=True)
+
+                            if feedback_submitted:
+                                # Salva o feedback usando a nova função
+                                # Converte o dicionário de resultado da API para string JSON para salvar.
+                                json_response_str = json.dumps(api_result, ensure_ascii=False, indent=2)
+                                success = save_user_feedback(user_id, rating, description, json_response_str)
+
+                                if success:
+                                    st.toast('Feedback enviado! Obrigado por nos ajudar a melhorar. 🚀')
