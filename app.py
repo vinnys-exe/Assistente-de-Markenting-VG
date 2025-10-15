@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import time
 import requests
-import json  # Garantindo o import para usar no feedback
+import json
 import firebase_admin
 from firebase_admin import credentials, initialize_app, firestore
 from firebase_admin import auth
@@ -248,8 +248,63 @@ def save_user_feedback(user_id: str, rating: str, input_prompt: str, ai_response
             
     # 2. MODO SIMULADO (Apenas loga a ação)
     else:
-        # st.info(f"Feedback Salvo (SIMULADO): {rating}") # Opcional: mostrar log para o usuário
         return True
+
+def update_user_plan(target_email: str, new_plan: str) -> bool:
+    """
+    Função administrativa/Webhook Simulada para alterar o plano de um usuário.
+    Garante que 'free' reset a contagem, e outros planos usem 0.
+    """
+    # 1. Limpar e-mail
+    clean_email = clean_email_to_doc_id(target_email)
+
+    # 2. MODO FIREBASE
+    if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+        # Primeiro, precisamos do UID do usuário para achar o documento.
+        # No cenário real, o Webhook teria o UID. Aqui, faremos uma busca por e-mail (mais lento, mas funciona).
+        try:
+            # Assumimos que o Firebase Auth está funcionando
+            user_record = st.session_state['auth'].get_user_by_email(target_email, app=st.session_state['firebase_app'])
+            user_id = user_record.uid
+            
+            user_ref = st.session_state["db"].collection("users").document(user_id)
+            
+            # Resetar a contagem de anúncios para 0 ao mudar para um plano pago,
+            # ou iniciar um novo ciclo se for free.
+            new_ads_count = 0 
+            
+            user_ref.set({
+                "plan_tier": new_plan,
+                "ads_generated": new_ads_count,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+            return True
+            
+        except firebase_admin._auth_utils.UserNotFoundError:
+            st.error(f"❌ Erro: Usuário com e-mail '{target_email}' não encontrado no Firebase Auth.")
+            return False
+        except Exception as e:
+            st.error(f"❌ Erro ao atualizar o plano no Firestore: {e}")
+            return False
+            
+    # 3. MODO SIMULADO (Atualiza a session_state)
+    else:
+        # No modo simulado, o user_id é o e-mail limpo.
+        user_data_key = f"user_{clean_email}"
+        # A API de autenticação não está ativa, então usamos o e-mail como ID
+        if st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email:
+             user_data_key = f"user_{st.session_state['logged_in_user_id']}"
+        else: # Se não for o logado, tentamos com o e-mail limpo (fallback)
+             user_data_key = f"user_{clean_email}"
+             
+        if user_data_key in st.session_state:
+            st.session_state[user_data_key]["plan_tier"] = new_plan
+            st.session_state[user_data_key]["ads_generated"] = 0 # Reset de contagem
+            return True
+        else:
+            # No modo dev simulado, se não encontrar na sessão, ele assume o e-mail logado
+            st.error(f"❌ Erro SIMULADO: Não foi possível aplicar o plano. Tente logar e usar seu e-mail de dev.")
+            return False
 
 
 # ----------------------------------------------------
@@ -387,6 +442,7 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
         result = response.json()
         json_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
         
+        # Retorna o dicionário para a UI
         return json.loads(json_text)
     
     except requests.exceptions.RequestException as e:
@@ -552,6 +608,50 @@ with st.sidebar:
                     else:
                         st.error("Preencha E-mail, Senha e Nome de Usuário.")
 
+    # Bloco de Upgrade para o Premium (aparece para Free e Essencial logado)
+    if st.session_state.get('logged_in_user_id') and not is_premium and not is_dev:
+        st.markdown("---")
+        st.markdown("#### 🚀 Quer o Plano Premium?")
+        st.markdown("""
+        <div style="text-align: center;" class="pro-button">
+            <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank">
+                <button>
+                    UPGRADE (Acesso Total)
+                </button>
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("---")
+
+    # NOVO: PAINEL DE CONTROLE DE PLANOS (Apenas para Desenvolvedor)
+    if st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
+        st.markdown("---")
+        with st.expander("🛠️ ADMIN: Controle de Planos (Webhook Simulado)"):
+            st.info("Painel DEV: Simule a compra de um plano para o usuário logado.")
+            
+            # Puxa o e-mail logado para facilitar o teste
+            target_email_admin = st.text_input("E-mail para Upgrade (Logado):", value=st.session_state['logged_in_user_email'])
+            
+            new_plan_admin = st.selectbox(
+                "Novo Plano:",
+                options=['free', 'essential', 'premium'],
+                index=2 # Padrão para premium
+            )
+            
+            if st.button(f"Aplicar Plano '{new_plan_admin.upper()}'", use_container_width=True):
+                if target_email_admin:
+                    success = update_user_plan(target_email_admin, new_plan_admin)
+                    if success:
+                        st.success(f"✅ Sucesso! Plano de {target_email_admin} alterado para {new_plan_admin.upper()}.")
+                        # Garante que o usuário logado veja a mudança imediatamente
+                        if clean_email_to_doc_id(target_email_admin) == clean_email_to_doc_id(st.session_state['logged_in_user_email']):
+                            st.rerun()
+                    else:
+                        st.error("Falha ao aplicar o plano. Verifique o console.")
+                else:
+                    st.error("E-mail do usuário não pode ser vazio.")
+
+
 # --- CONTEÚDO PRINCIPAL ---
 
 if not st.session_state['logged_in_user_id']:
@@ -566,6 +666,7 @@ else:
     # Aplicação dos benefícios
     is_essential_or_premium = (user_plan_tier in ["essential", "premium"])
     is_premium = (user_plan_tier == "premium")
+    is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL)
     
     st.markdown("---")
     
@@ -579,8 +680,6 @@ else:
     col_status, col_upgrade_link = st.columns([2, 1])
 
     with col_status:
-        is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL)
-        
         if is_dev:
             st.markdown(f"**Status:** ⭐ Acesso de Desenvolvedor (PREMIUM Ilimitado)")
         else:
@@ -603,21 +702,6 @@ else:
                 """, unsafe_allow_html=True)
             
     st.markdown("---")
-
-    with st.sidebar:
-        if not is_essential_or_premium and not is_dev:
-            st.markdown("---")
-            st.markdown("#### 🚀 Quer o Plano Premium?")
-            st.markdown("""
-            <div style="text-align: center;" class="pro-button">
-                <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank">
-                    <button>
-                        UPGRADE (Acesso Total)
-                    </button>
-                </a>
-            </div>
-            """, unsafe_allow_html=True)
-            st.markdown("---")
         
     if user_plan_tier == "free" and ads_used >= FREE_LIMIT and not is_dev:
         display_upgrade_page(user_id)
@@ -727,7 +811,7 @@ else:
                                 with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
                                     display_result_box("📈", "Títulos de Campanhas", api_result.get("sugestao_campanhas", "N/A"), "camp_box")
 
-                        # --- SEÇÃO DE FEEDBACK (NOVO BLOCO) ---
+                        # --- SEÇÃO DE FEEDBACK (BLOCO COMPLETO) ---
                         st.markdown("---")
                         
                         # Adiciona um novo form para o feedback, pois ele precisa de submissão separada.
