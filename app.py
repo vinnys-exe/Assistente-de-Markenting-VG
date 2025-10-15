@@ -54,16 +54,16 @@ if 'db' not in st.session_state:
 #               FUNÇÃO DE CHAMADA À IA OTIMIZADA
 # ----------------------------------------------------
 
-def call_gemini_api(product_type: str, description: str) -> Optional[Dict[str, str]]:
+def call_gemini_api(product_type: str, description: str, tone: str) -> Optional[Dict[str, str]]:
     """
     Chama a API do Gemini com um prompt estruturado para gerar o anúncio.
-    Otimizado para copywriting de alta conversão usando o framework AIDA (Atenção, Interesse, Desejo, Ação).
+    Adiciona o parâmetro 'tone' para adaptar a voz do copywriter.
     """
     if not GEMINI_API_KEY:
         st.error("Chave da API não configurada. Verifique o secrets.toml.")
         return None
     
-    # NOVO SYSTEM PROMPT: Mais focado em conversão e gatilhos mentais
+    # SYSTEM PROMPT: Otimizado para conversão e gatilhos mentais
     system_prompt = (
         "Você é o Copywriter-Chefe da agência 'AnuncIA'. Sua missão é gerar um anúncio que converte como fogo. "
         "A copy deve ser estruturada seguindo o framework AIDA (Atenção, Interesse, Desejo, Ação), "
@@ -74,15 +74,16 @@ def call_gemini_api(product_type: str, description: str) -> Optional[Dict[str, s
         "Não inclua qualquer outro texto antes ou depois do JSON."
     )
     
-    # Prompt do Usuário: Os dados do formulário
+    # Prompt do Usuário: INJETANDO O TOM DE VOZ
     user_prompt = (
         f"Gere um anúncio persuasivo de alta conversão. "
         f"Tipo de Produto: {product_type}. "
         f"Descrição Detalhada e Foco: '{description}'. "
+        f"O TOM DE VOZ OBRIGATÓRIO deve ser: {tone}. "
         f"A copy_aida deve ter no máximo 1500 caracteres, ser focada nos benefícios (não nas características) e incluir um elemento de urgência ou escassez."
     )
 
-    # Configuração de Geração (Schema de saída JSON aprimorado)
+    # Configuração de Geração (Schema de saída JSON)
     generation_config = {
         "responseMimeType": "application/json",
         "responseSchema": {
@@ -111,10 +112,8 @@ def call_gemini_api(product_type: str, description: str) -> Optional[Dict[str, s
         
         result = response.json()
         
-        # Tenta extrair a string JSON
         json_string = result['candidates'][0]['content']['parts'][0]['text']
         
-        # Tenta parsear a string JSON
         return json.loads(json_string)
         
     except requests.exceptions.HTTPError as e:
@@ -132,7 +131,7 @@ def call_gemini_api(product_type: str, description: str) -> Optional[Dict[str, s
 # ----------------------------------------------------
 # FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
 # ----------------------------------------------------
-# (Manter o código de get_user_data e increment_ads_count aqui)
+# (Mantidas inalteradas)
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca)."""
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
@@ -210,14 +209,24 @@ else:
 
     if ads_used >= FREE_LIMIT:
         st.warning("🚫 **Limite gratuito atingido!** Faça upgrade para liberar o uso ilimitado.")
-        st.markdown(f"**[🚀 Clique aqui para ver nossos planos (R${19.90}/mês)](LINK_PARA_PAGAMENTO)**")
+        # Link de pagamento agora vai para a nova seção de monetização
+        st.markdown(f"**[🚀 Clique aqui para ver nossos planos e fazer upgrade!](LINK_PARA_PAGAMENTO)**")
     
     else:
         # --- Formulário de Geração de Anúncios ---
         with st.form("input_form"):
             st.subheader("🛠️ Crie Seu Anúncio Profissional")
             
-            product_type = st.selectbox("Tipo de produto", ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"])
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                product_type = st.selectbox("Tipo de produto", 
+                                            ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"])
+            with col_b:
+                # NOVO CAMPO: Tom de Voz
+                tone = st.selectbox("Tom de Voz da Copy", 
+                                    ["Persuasivo/Vendedor", "Divertido/Casual", "Formal/Técnico", "Agressivo/Urgente"])
+
             description = st.text_area("Descrição do produto e o que você quer vender (máx. 800 caracteres):", max_chars=800)
             
             submitted = st.form_submit_button("Gerar Anúncio com IA")
@@ -228,8 +237,8 @@ else:
             else:
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
                     
-                    # Chama a função real da API
-                    ad_content = call_gemini_api(product_type, description)
+                    # Chama a função real da API, passando o tom
+                    ad_content = call_gemini_api(product_type, description, tone)
 
                     if ad_content:
                         # 1. Incrementa a contagem no Firebase
@@ -242,7 +251,7 @@ else:
                         # Exibição Otimizada (UI/UX)
                         
                         st.markdown(f"## 💥 {ad_content.get('titulo_gancho', 'Título Gerado')}")
-                        st.caption("Pronto para usar em redes sociais e anúncios.")
+                        st.caption(f"Tom de voz aplicado: **{tone}**")
                         st.markdown("---")
 
                         # Displaying the main copy
