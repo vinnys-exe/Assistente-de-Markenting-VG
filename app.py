@@ -7,7 +7,7 @@ import json
 import firebase_admin 
 from firebase_admin import credentials, initialize_app, firestore 
 from google.cloud.firestore import Client
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # --- Configurações & Chaves (Puxadas do secrets.toml) ---
 GEMINI_API_KEY = st.secrets.get("OPENAI_API_KEY", None) 
@@ -78,7 +78,7 @@ def display_upgrade_page():
                 <ul>
                     <li>✅ 50 Anúncios/Mês</li>
                     <li>✅ Acesso a Todos os Tons de Voz</li>
-                    <li>✅ Suporte por E-mail</li>
+                    <li>❌ Geração de Roteiros de Vídeo</li>
                 </ul>
                 <a href='{PAYMENT_URL}?plan=starter' target='_blank'>
                     <button style='background-color: #2ecc71; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px;'>
@@ -100,7 +100,7 @@ def display_upgrade_page():
                 <p><strong>Para agências e empreendedores de alto volume.</strong></p>
                 <ul>
                     <li>🌟 ANÚNCIOS ILIMITADOS</li>
-                    <li>✅ Criação de Segmentos Avançada</li>
+                    <li>✅ GERAÇÃO DE ROTEIROS DE VÍDEO</li>
                     <li>✅ Suporte VIP Prioritário</li>
                 </ul>
                 <a href='{PAYMENT_URL}?plan=pro' target='_blank'>
@@ -121,48 +121,72 @@ def display_upgrade_page():
 # ----------------------------------------------------
 #               FUNÇÃO DE CHAMADA À IA OTIMIZADA
 # ----------------------------------------------------
-# (Mantida inalterada da última iteração, exceto a URL base da API que não deve ter a chave no URL, pois a chave está no cabeçalho)
-def call_gemini_api(product_type: str, description: str, tone: str) -> Optional[Dict[str, str]]:
+
+def call_gemini_api(product_type: str, description: str, tone: str, generate_video: bool, user_plan: str) -> Optional[Dict[str, str]]:
     """
-    Chama a API do Gemini com um prompt estruturado para gerar o anúncio.
-    Adiciona o parâmetro 'tone' para adaptar a voz do copywriter.
+    Chama a API do Gemini. Agora suporta a geração condicional de conteúdo de vídeo.
     """
     if not GEMINI_API_KEY:
         st.error("Chave da API não configurada. Verifique o secrets.toml.")
         return None
     
-    # SYSTEM PROMPT: Otimizado para conversão e gatilhos mentais
+    # Define as chaves JSON obrigatórias
+    required_keys = ["titulo_gancho", "copy_aida", "call_to_action", "segmentacao_e_ideias"]
+    
+    # Adiciona chaves de vídeo se for solicitado E o plano for PRO
+    if generate_video:
+        required_keys.extend(["gancho_video", "roteiro_basico"])
+        video_instruction = (
+            "Além da copy tradicional, gere também um 'gancho_video' de 5 segundos para TikTok/Reels "
+            "e um 'roteiro_basico' de 3 etapas com a cena, a fala e a música/efeito."
+        )
+        
+        # O prompt de vídeo é mais exigente, então só permitimos no PRO
+        if user_plan != "pro":
+            st.warning("O recurso de Geração de Roteiro de Vídeo é exclusivo do Plano PRO. A IA gerará apenas a copy tradicional.")
+            generate_video = False # Desativa a geração de vídeo para o prompt
+
+    else:
+        video_instruction = ""
+    
+    
+    # SYSTEM PROMPT base
     system_prompt = (
         "Você é o Copywriter-Chefe da agência 'AnuncIA'. Sua missão é gerar um anúncio que converte como fogo. "
         "A copy deve ser estruturada seguindo o framework AIDA (Atenção, Interesse, Desejo, Ação), "
         "com uso de gatilhos mentais de Escassez e Prova Social. "
-        "O idioma de saída DEVE ser Português Brasileiro (PT-BR), com emojis e linguagem persuasiva. "
-        "Sua resposta DEVE ser um objeto JSON válido, contendo obrigatoriamente 4 chaves: "
-        "'titulo_gancho', 'copy_aida', 'call_to_action', e 'segmentacao_e_ideias'. "
-        "Não inclua qualquer outro texto antes ou depois do JSON."
+        f"O idioma de saída DEVE ser Português Brasileiro (PT-BR), com emojis e linguagem persuasiva. {video_instruction} "
+        "Sua resposta DEVE ser um objeto JSON válido, contendo obrigatoriamente as seguintes chaves: "
+        f"{required_keys}. Não inclua qualquer outro texto antes ou depois do JSON."
     )
     
-    # Prompt do Usuário: INJETANDO O TOM DE VOZ
+    # Prompt do Usuário
     user_prompt = (
         f"Gere um anúncio persuasivo de alta conversão. "
         f"Tipo de Produto: {product_type}. "
         f"Descrição Detalhada e Foco: '{description}'. "
         f"O TOM DE VOZ OBRIGATÓRIO deve ser: {tone}. "
-        f"A copy_aida deve ter no máximo 1500 caracteres, ser focada nos benefícios (não nas características) e incluir um elemento de urgência ou escassez."
+        f"A copy_aida deve ter no máximo 1500 caracteres."
     )
 
-    # Configuração de Geração (Schema de saída JSON)
+    # Configuração de Geração (Schema de saída JSON dinâmico)
+    schema_properties = {
+        "titulo_gancho": {"type": "STRING", "description": "Um título curto e agressivo (gancho) para capturar a atenção (max 80 caracteres)."},
+        "copy_aida": {"type": "STRING", "description": "O corpo do texto principal do anúncio, seguindo AIDA (Atenção, Interesse, Desejo, Ação)."},
+        "call_to_action": {"type": "STRING", "description": "Uma chamada para ação direta, com senso de urgência (ex: 'Últimas 24h! Garanta sua vaga')."},
+        "segmentacao_e_ideias": {"type": "STRING", "description": "Sugestões de público-alvo (Facebook Ads) e uma breve ideia de imagem/vídeo para o anúncio."}
+    }
+
+    if generate_video:
+        schema_properties["gancho_video"] = {"type": "STRING", "description": "Frase de 5 segundos (hook) ultra-curta para prender a atenção no vídeo."}
+        schema_properties["roteiro_basico"] = {"type": "STRING", "description": "Roteiro de vídeo estruturado em 3 etapas (Cena, Fala, Efeito/CTA)."}
+
     generation_config = {
         "responseMimeType": "application/json",
         "responseSchema": {
             "type": "OBJECT",
-            "properties": {
-                "titulo_gancho": {"type": "STRING", "description": "Um título curto e agressivo (gancho) para capturar a atenção (max 80 caracteres)."},
-                "copy_aida": {"type": "STRING", "description": "O corpo do texto principal do anúncio, seguindo AIDA (Atenção, Interesse, Desejo, Ação)."},
-                "call_to_action": {"type": "STRING", "description": "Uma chamada para ação direta, com senso de urgência (ex: 'Últimas 24h! Garanta sua vaga')."},
-                "segmentacao_e_ideias": {"type": "STRING", "description": "Sugestões de público-alvo (Facebook Ads) e uma breve ideia de imagem/vídeo para o anúncio."}
-            },
-            "required": ["titulo_gancho", "copy_aida", "call_to_action", "segmentacao_e_ideias"]
+            "properties": schema_properties,
+            "required": required_keys
         }
     }
 
@@ -172,14 +196,12 @@ def call_gemini_api(product_type: str, description: str, tone: str) -> Optional[
         "config": generation_config
     }
     
-    # Passando a chave no header de autorização (Método preferido)
     headers = {
         'Content-Type': 'application/json',
         'x-api-key': GEMINI_API_KEY 
     }
     
     try:
-        # A URL não precisa mais do ?key={GEMINI_API_KEY}
         response = requests.post(API_URL, headers=headers, data=json.dumps(payload))
         response.raise_for_status() 
         
@@ -247,6 +269,25 @@ with st.sidebar:
     email_input = st.text_input("Seu E-mail (Para controle de uso)", 
                                 placeholder="seu@email.com")
     
+    # Adicionar um botão simulado de upgrade/downgrade para debug
+    if st.session_state.get('logged_in_user_id'):
+        user_id = st.session_state['logged_in_user_id']
+        current_plan = get_user_data(user_id).get('plan', 'free')
+        
+        st.markdown("---")
+        st.caption("Ações de Debug (Plano)")
+        
+        new_plan = st.selectbox("Simular Plano", ["free", "starter", "pro"], index=["free", "starter", "pro"].index(current_plan))
+
+        if st.button(f"Atualizar Plano para {new_plan.upper()}"):
+            if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+                st.session_state["db"].collection("users").document(user_id).set({"plan": new_plan}, merge=True)
+                st.session_state[f"user_{user_id}"] = get_user_data(user_id) # Atualiza o estado local
+                st.rerun()
+            else:
+                st.warning("Ação de simulação de plano indisponível no modo OFFLINE/SIMULAÇÃO.")
+
+
     if st.button("Acessar / Simular Login"):
         if "@" in email_input:
             clean_email = email_input
@@ -280,14 +321,13 @@ else:
     if user_plan == "free":
         st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
     else:
-        st.markdown(f"**Status:** Seu plano **{user_plan.upper()}** está ativo! Uso Ilimitado.")
+        st.markdown(f"**Status:** Seu plano **{user_plan.upper()}** está ativo! Uso Ilimitado e Recursos PRO.")
     st.markdown("---")
 
 
-    # MUDANÇA PRINCIPAL: Lógica de Exibição
-    # Se o plano for "free" E o uso for maior ou igual ao limite, mostra a página de upgrade
+    # Lógica de Exibição
     if user_plan == "free" and ads_used >= FREE_LIMIT:
-        display_upgrade_page() # Chama a nova função de vendas
+        display_upgrade_page() # Exibe a nova função de vendas
     
     else:
         # --- Formulário de Geração de Anúncios ---
@@ -302,6 +342,20 @@ else:
             with col_b:
                 tone = st.selectbox("Tom de Voz da Copy", 
                                     ["Persuasivo/Vendedor", "Divertido/Casual", "Formal/Técnico", "Agressivo/Urgente"])
+            
+            # NOVO CAMPO: Geração de Vídeo (Recurso PRO)
+            col_c, col_d = st.columns([1, 2])
+            with col_c:
+                 generate_video = st.checkbox("➕ Roteiro de Vídeo (Reels/TikTok)")
+            with col_d:
+                if generate_video and user_plan != "pro":
+                    st.warning("⚠️ Recurso PRO! Disponível apenas para o Plano PRO.")
+                elif generate_video and user_plan == "pro":
+                    st.success("✅ Recurso PRO ativado.")
+                elif generate_video:
+                    # Se o plano for starter ou free (e o warning já foi dado)
+                    pass
+
 
             description = st.text_area("Descrição do produto e o que você quer vender (máx. 800 caracteres):", max_chars=800)
             
@@ -311,16 +365,17 @@ else:
             if not description:
                 st.error("Por favor, insira uma descrição do produto para gerar o anúncio.")
             else:
+                # O recurso de vídeo só será ativado na chamada se o plano for 'pro'
+                should_generate_video = generate_video and user_plan == "pro"
+
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
                     
-                    ad_content = call_gemini_api(product_type, description, tone)
+                    ad_content = call_gemini_api(product_type, description, tone, should_generate_video, user_plan)
 
                     if ad_content:
                         # 1. Incrementa a contagem no Firebase (APENAS se for plano free)
                         if user_plan == "free":
                             new_count = increment_ads_count(user_id)
-                        else:
-                            new_count = ads_used # Não incrementa se for pago
                         
                         # 2. Exibição do resultado REAL da IA
                         st.success(f"✅ Anúncio Gerado com Sucesso!")
@@ -347,6 +402,18 @@ else:
                             st.info(ad_content.get('segmentacao_e_ideias', 'Erro na segmentação'))
                         
                         st.markdown("---")
+                        
+                        # --- EXIBIÇÃO DO ROTEIRO DE VÍDEO (RECURSO PRO) ---
+                        if "gancho_video" in ad_content:
+                            with st.expander("🎬 Roteiro de Vídeo Curto (Reels/TikTok) - RECURSO PRO", expanded=True):
+                                st.markdown(f"**Gancho (Hook - 5 Segundos):**")
+                                st.code(ad_content['gancho_video'])
+                                st.markdown("---")
+                                st.markdown("**Roteiro Básico (Cena + Ação):**")
+                                st.code(ad_content['roteiro_basico'], language='markdown')
+                        elif generate_video and user_plan != "pro":
+                            # Mensagem para quem tentou usar o PRO no plano FREE
+                             st.info(f"✨ **Roteiro de Vídeo:** Este é um recurso exclusivo do Plano PRO. Faça upgrade para desbloquear!")
                         
                     else:
                         st.error("Falha ao gerar o anúncio. Tente novamente ou verifique as chaves da API.")
