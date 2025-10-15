@@ -52,7 +52,7 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
-OPENAI_KEY = st.secrets.get("OPENAI_API_KEY", "")
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") # Chave corrigida
 FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
 DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "")
 
@@ -86,10 +86,8 @@ if 'db' not in st.session_state:
             # 3. Conectar ao Firestore
             db_client = firestore.client(app=firebase_admin.get_app("anuncia_app"))
             st.session_state["db"] = db_client 
-            # st.success("✅ Conexão Firebase/Firestore estabelecida.") # Removido para limpar a tela
             
     except Exception as e:
-        # st.error(f"❌ Erro ao inicializar Firebase: {e}") # Comentei para evitar poluir o app
         st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
         st.session_state["db"] = "SIMULATED" 
         
@@ -148,9 +146,9 @@ def increment_ads_count(user_id: str, current_plan: str) -> int:
 def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_user: bool, needs_video: bool) -> Union[Dict, str]:
     """Chama a API (simulando Gemini/OpenAI) para gerar copy em formato JSON."""
     
-    api_key = OPENAI_KEY
+    api_key = GEMINI_KEY # Usando a chave GEMINI_API_KEY
     if not api_key:
-        return {"error": "Chave de API (OPENAI_API_KEY) não configurada."}
+        return {"error": "Chave de API (GEMINI_API_KEY) não configurada."}
 
     # 1. CONSTRUÇÃO DO PROMPT E SCHEMA (Dinâmico para o Plano PRO)
     
@@ -393,8 +391,8 @@ else:
                 st.error("Por favor, forneça uma descrição detalhada do produto para a IA.")
             elif needs_video and not is_pro_user:
                 st.error("⚠️ **Recurso PRO:** A Geração de Roteiro de Vídeo é exclusiva do Plano PRO. Por favor, desmarque a opção ou faça o upgrade.")
-            elif not OPENAI_KEY:
-                st.error("⚠️ Erro de Configuração: A chave de API (OPENAI_API_KEY) não está definida no secrets.toml.")
+            elif not GEMINI_KEY:
+                st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml.")
             else:
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
                     
@@ -403,7 +401,7 @@ else:
                     
                     if "error" in api_result:
                         st.error(f"❌ Erro na Geração da Copy: {api_result['error']}")
-                        st.info("A contagem de uso NÃO foi debitada. Tente novamente.")
+                        st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
                     else:
                         # 2. Incrementa a contagem no Firebase/Simulação
                         new_count = increment_ads_count(user_id, user_plan)
@@ -457,7 +455,7 @@ if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
 elif st.session_state.get("db") == "SIMULATED":
     st.sidebar.warning("⚠️ Firebase: MODO SIMULADO")
 
-if OPENAI_KEY:
+if GEMINI_KEY:
     st.sidebar.success("✅ Chave de API OK")
 else:
     st.sidebar.error("❌ Chave de API AUSENTE")
