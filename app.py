@@ -178,3 +178,8 @@ else:
     if st.session_state["db"] != "SIMULATED":
         if st.button("Ver Meus Dados no Firestore (Debug)"):
             st.json(user_data)
+if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+    st.success("✅ Firebase está funcionando e autenticado corretamente.")
+else:
+    st.warning("⚠️ Firebase em modo simulado (sem conexão ativa).")
+
