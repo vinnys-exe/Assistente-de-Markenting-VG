@@ -801,7 +801,7 @@ else:
         
         user_description = st.text_area(
             "Rascunho do Conteúdo/Esboço do Anúncio (Obrigatório):", 
-            value="Estou anunciando meu curso que ensina a ter 10k seguidores em 30 dias e a fazer a primeira venda em 7 dias, com depoimentos de alunos que fizeram +R$5.000.",
+            value="EX:Estou anunciando meu curso que ensina a ter 10k seguidores em 30 dias e a fazer a primeira venda em 7 dias, com depoimentos de alunos que fizeram +R$5.000.",
             height=150
         )
 
@@ -936,3 +936,4 @@ if st.session_state.get('last_ad_copy') and st.session_state.get('last_ad_strate
             if save_user_feedback(user_id, feedback_rating, input_prompt, ai_response):
                 st.success("Obrigado! Seu feedback é crucial para melhorarmos a AnuncIA. 😊")
             st.experimental_set_query_params() # Limpa o feedback
+
