@@ -1,12 +1,16 @@
 import streamlit as st
 import os
 import time
+import re
+# CORREÇÃO 1: Importar o módulo principal 'firebase_admin' para usar '_apps'
+import firebase_admin 
 from firebase_admin import credentials, initialize_app, firestore
 from google.cloud.firestore import Client
 from typing import Dict, Any
-import re # Para a lógica anti-abuso de e-mail alias
+
 
 # --- Configurações & Chaves (Puxadas do secrets.toml) ---
+# A chave OpenAI é apenas um placeholder de demonstração.
 OPENAI_KEY = st.secrets.get("OPENAI_API_KEY", None) 
 FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3)) # Garante que o limite é um inteiro
 
@@ -35,18 +39,20 @@ if 'db' not in st.session_state:
             service_account_info["private_key"] = private_key
 
             # 2. Inicializar o Firebase Admin SDK (só se não estiver inicializado)
-            if not firestore._apps:
+            # CORREÇÃO 2: Usa 'firebase_admin._apps' em vez de 'firestore._apps'
+            if not firebase_admin._apps:
                 cred = credentials.Certificate(service_account_info)
                 # Inicializa o app com um nome para evitar o erro de re-inicialização
                 initialize_app(cred, name="anuncia_app")
             
             # 3. Conectar ao Firestore
             # Tenta usar o client associado ao app inicializado
-            db_client = firestore.client(app=firestore.get_app("anuncia_app"))
+            db_client = firestore.client(app=firebase_admin.get_app("anuncia_app"))
             st.session_state["db"] = db_client # Armazena o cliente no estado da sessão
             st.success("✅ Conexão Firebase/Firestore estabelecida.")
 
     except Exception as e:
+        # Nota: Deixa este erro genérico, pois pode ser problema de Private Key ou Regra de Segurança.
         st.error(f"❌ Erro ao inicializar Firebase: {e}")
         st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
         st.session_state["db"] = "SIMULATED" # Sinaliza que está em modo de simulação
@@ -178,8 +184,8 @@ else:
     if st.session_state["db"] != "SIMULATED":
         if st.button("Ver Meus Dados no Firestore (Debug)"):
             st.json(user_data)
+            
 if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
     st.success("✅ Firebase está funcionando e autenticado corretamente.")
 else:
     st.warning("⚠️ Firebase em modo simulado (sem conexão ativa).")
-
