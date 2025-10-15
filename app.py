@@ -1,124 +1,180 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-import openai
-import json
+import os
+import time
+from firebase_admin import credentials, initialize_app, firestore
+from google.cloud.firestore import Client
+from typing import Dict, Any
+import re # Para a lógica anti-abuso de e-mail alias
 
-# -----------------------------
-# Configurações Iniciais
-# -----------------------------
-st.title("🧠 AnuncIA — Gerador de Anúncios Profissionais")
+# --- Configurações & Chaves (Puxadas do secrets.toml) ---
+OPENAI_KEY = st.secrets.get("OPENAI_API_KEY", None) 
+FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3)) # Garante que o limite é um inteiro
 
-# Lê os dados do arquivo secrets.toml
-try:
-    FIREBASE_CONFIG = st.secrets["FIREBASE_ADMIN_CREDENTIAL_JSON"]
-    OPENAI_KEY = st.secrets.get("OPENAI_API_KEY")
-except Exception as e:
-    st.error(f"Erro ao ler secrets: {e}")
-    st.stop()
+# ----------------------------------------------------
+#               CONFIGURAÇÃO DO FIREBASE
+# ----------------------------------------------------
 
-# Inicializa Firebase
-if not firebase_admin._apps:
+# Verifica se o Firebase já foi inicializado na sessão
+if 'db' not in st.session_state:
+    st.session_state['db'] = None
+    
     try:
-        cred = credentials.Certificate(dict(FIREBASE_CONFIG))
-        firebase_admin.initialize_app(cred)
-        st.write("✅ Firebase inicializado com sucesso.")
+        # 1. Obter as credenciais do secrets.toml
+        firebase_config = st.secrets.get("firebase", None)
+        
+        if not firebase_config:
+            st.warning("⚠️ Configuração [firebase] não encontrada. O app funcionará no MODO OFFLINE/SIMULAÇÃO.")
+        else:
+            # Corrige a private_key (substitui \\n por \n)
+            private_key = firebase_config.get("private_key", "").replace("\\n", "\n")
+            
+            # Cria o objeto de credenciais de serviço
+            service_account_info = {
+                k: v for k, v in firebase_config.items() if k not in ["private_key"]
+            }
+            service_account_info["private_key"] = private_key
+
+            # 2. Inicializar o Firebase Admin SDK (só se não estiver inicializado)
+            if not firestore._apps:
+                cred = credentials.Certificate(service_account_info)
+                # Inicializa o app com um nome para evitar o erro de re-inicialização
+                initialize_app(cred, name="anuncia_app")
+            
+            # 3. Conectar ao Firestore
+            # Tenta usar o client associado ao app inicializado
+            db_client = firestore.client(app=firestore.get_app("anuncia_app"))
+            st.session_state["db"] = db_client # Armazena o cliente no estado da sessão
+            st.success("✅ Conexão Firebase/Firestore estabelecida.")
+
     except Exception as e:
-        st.error(f"Erro ao inicializar Firebase: {e}")
+        st.error(f"❌ Erro ao inicializar Firebase: {e}")
+        st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
+        st.session_state["db"] = "SIMULATED" # Sinaliza que está em modo de simulação
 
-# Conecta ao Firestore
-try:
-    db = firestore.client()
-except Exception as e:
-    st.error(f"Erro ao conectar ao Firestore: {e}")
-    st.stop()
 
-# Inicializa OpenAI
-if OPENAI_KEY:
-    openai.api_key = OPENAI_KEY
+# ----------------------------------------------------
+#           FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
+# ----------------------------------------------------
 
-# -----------------------------
-# Funções principais
-# -----------------------------
-def registrar_usuario(email, senha):
-    try:
-        user = auth.create_user(email=email, password=senha)
-        db.collection("usuarios").document(email).set({
-            "anuncios_usados": 0
-        })
-        st.success("Usuário registrado com sucesso!")
-    except Exception as e:
-        st.error(f"Erro ao registrar: {e}")
+def get_user_data(user_id: str) -> Dict[str, Any]:
+    """Busca os dados do usuário no Firestore (ou simula a busca)."""
+    if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+        # Modo Firebase
+        user_ref = st.session_state["db"].collection("users").document(user_id)
+        doc = user_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+    # Modo Simulado (Fallback)
+    return st.session_state.get(f"user_{user_id}", {"ads_generated": 0, "plan": "free"})
 
-def login_usuario(email, senha):
-    doc = db.collection("usuarios").document(email).get()
-    if doc.exists:
-        st.session_state['user_email'] = email
-        return True
+def increment_ads_count(user_id: str):
+    """Incrementa a contagem de anúncios (Firebase ou Simulado)."""
+    user_data = get_user_data(user_id)
+    new_count = user_data.get("ads_generated", 0) + 1
+    
+    if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
+        # Modo Firebase
+        user_ref = st.session_state["db"].collection("users").document(user_id)
+        # Atualiza o Firestore
+        user_ref.set({
+            "ads_generated": new_count,
+            "last_used": firestore.SERVER_TIMESTAMP,
+            "plan": user_data.get("plan", "free")
+        }, merge=True)
     else:
-        st.error("Usuário não encontrado. Registre-se primeiro.")
-        return False
+        # Modo Simulado (apenas para a sessão Streamlit atual)
+        user_data["ads_generated"] = new_count
+        st.session_state[f"user_{user_id}"] = user_data 
 
-def gerar_anuncio(descricao_produto):
-    prompt = f"Gere um anúncio profissional e persuasivo para o seguinte produto: {descricao_produto}"
-    if OPENAI_KEY:
-        try:
-            response = openai.Completion.create(
-                engine="text-davinci-003",
-                prompt=prompt,
-                max_tokens=200
-            )
-            return response.choices[0].text.strip()
-        except Exception as e:
-            return f"Erro ao gerar anúncio: {e}"
-    else:
-        return f"[IA desligada] Seu anúncio: {descricao_produto}"
+    return new_count
 
-def verificar_limite(email):
-    doc = db.collection("usuarios").document(email).get()
-    if doc.exists:
-        return doc.to_dict().get("anuncios_usados", 0)
-    else:
-        db.collection("usuarios").document(email).set({"anuncios_usados": 0})
-        return 0
+# ----------------------------------------------------
+#           IMPLEMENTAÇÃO DE LOGIN SIMPLIFICADO
+# ----------------------------------------------------
 
-def incrementar_anuncio(email):
-    db.collection("usuarios").document(email).update({
-        "anuncios_usados": firestore.Increment(1)
-    })
+if 'logged_in_user_id' not in st.session_state:
+    st.session_state['logged_in_user_id'] = None
 
-# -----------------------------
-# Interface Streamlit
-# -----------------------------
-if 'user_email' not in st.session_state:
-    st.subheader("Login / Registro")
-    email = st.text_input("E-mail")
-    senha = st.text_input("Senha", type="password")
+st.set_page_config(page_title="AnuncIA - Gerador de Anúncios", layout="centered")
+st.title("✨ AnuncIA — O Gerador de Anúncios Inteligente")
 
-    if st.button("Registrar"):
-        registrar_usuario(email, senha)
+# Área de Login/Identificação na Sidebar
+with st.sidebar:
+    st.title("🔒 Login/Acesso")
+    email_input = st.text_input("Seu E-mail (Para controle de uso)", 
+                                placeholder="seu@email.com")
+    
+    if st.button("Acessar / Simular Login"):
+        if "@" in email_input:
+            # 1. Aplica a lógica anti-abuso de e-mail alias (ignora '+alias')
+            clean_email = email_input
+            if "+" in email_input:
+                local_part, domain = email_input.split("@")
+                local_part = local_part.split("+")[0]
+                clean_email = f"{local_part}@{domain}"
+            
+            # 2. Cria um ID limpo para usar como Document ID no Firestore
+            # Subistitui caracteres que podem dar problema no Firebase ID
+            user_doc_id = re.sub(r'[^\w\-@\.]', '_', clean_email)
+            
+            st.session_state['logged_in_user_id'] = user_doc_id
+            st.success(f"Logado como: {clean_email}")
+        else:
+            st.error("Por favor, insira um e-mail válido.")
 
-    if st.button("Login"):
-        if login_usuario(email, senha):
-            st.experimental_rerun()
+# ----------------------------------------------------
+#                   INTERFACE PRINCIPAL
+# ----------------------------------------------------
+
+if not st.session_state['logged_in_user_id']:
+    st.info("Insira seu e-mail na barra lateral para começar seu teste grátis.")
 else:
-    email = st.session_state['user_email']
-    limite_usado = verificar_limite(email)
-    FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
+    # --- Verificação de Limite e Exibição de Status ---
+    user_id = st.session_state['logged_in_user_id']
+    user_data = get_user_data(user_id)
+    ads_used = user_data.get("ads_generated", 0)
 
-    st.subheader(f"Bem-vindo(a), {email}!")
-    st.write(f"Anúncios usados: {limite_usado}/{FREE_LIMIT}")
+    st.markdown("---")
+    st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+    st.markdown("---")
 
-    if limite_usado >= FREE_LIMIT:
-        st.warning("Você atingiu o limite de anúncios grátis. Faça upgrade para continuar.")
+
+    if ads_used >= FREE_LIMIT:
+        st.warning("🚫 **Limite gratuito atingido!** Faça upgrade para liberar o uso ilimitado.")
+        st.markdown(f"**[🚀 Clique aqui para ver nossos planos (R${19.90}/mês)](LINK_PARA_PAGAMENTO)**")
+    
     else:
-        descricao = st.text_area("Descreva seu produto ou serviço:")
-        if st.button("Gerar Anúncio"):
-            anuncio = gerar_anuncio(descricao)
-            st.success("Anúncio gerado com sucesso!")
-            st.write(anuncio)
-            incrementar_anuncio(email)
+        # --- Formulário de Geração de Anúncios ---
+        with st.form("input_form"):
+            st.subheader("🛠️ Crie Seu Anúncio Profissional")
+            
+            # Campos do formulário...
+            product_type = st.selectbox("Tipo de produto", ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"])
+            description = st.text_area("Descrição do produto e o que você quer vender:", max_chars=800)
+            
+            # Botão de submissão
+            submitted = st.form_submit_button("Gerar Anúncio com IA")
 
-    if st.button("Logout"):
-        del st.session_state['user_email']
-        st.experimental_rerun()
+        if submitted:
+            # Lógica de processamento e chamada de API (simulação)
+            with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
+                time.sleep(2) # Simula o tempo de API
+                
+                # SIMULAÇÃO DE GERAÇÃO
+                simulated_title = f"✨ Venda {product_type}: {description[:40]}..."
+                
+                # 1. Incrementa a contagem no Firebase/Simulação
+                new_count = increment_ads_count(user_id)
+                
+                # 2. Exibição do resultado (simulação)
+                st.success(f"✅ Anúncio Gerado com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
+                
+                st.markdown(f"### 🎯 Título Sugerido: {simulated_title}")
+                st.markdown(f"**Texto:** Sua descrição foi transformada em um texto persuasivo para {product_type}. Use CTAs fortes e gatilhos mentais!")
+                st.markdown(f"**Grupos Recomendados:** Marketing Digital BR, Vendas {product_type}, Ofertas Online.")
+                st.markdown("---")
+
+    # Botão de debug (útil para ver se o Firebase está funcionando)
+    if st.session_state["db"] != "SIMULATED":
+        if st.button("Ver Meus Dados no Firestore (Debug)"):
+            st.json(user_data)
