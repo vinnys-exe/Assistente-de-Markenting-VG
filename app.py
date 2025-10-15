@@ -5,7 +5,7 @@ import requests
 import json
 import firebase_admin
 from firebase_admin import credentials, initialize_app, firestore
-from firebase_admin import auth # Importação adicionada para autenticação
+from firebase_admin import auth 
 from google.cloud.firestore import Client
 from typing import Dict, Any, Union
 import re 
@@ -99,9 +99,9 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
 # A chave de API do Gemini, limite de uso gratuito e email do desenvolvedor 
 # são lidos do arquivo de segredos do Streamlit.
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") 
-FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
-DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "") 
+GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "") 
+FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
+DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "") 
 
 
 # ----------------------------------------------------
@@ -118,14 +118,17 @@ if 'db' not in st.session_state:
         # Busca a configuração do Firebase (agora na seção [firebase] do secrets.toml)
         firebase_config = st.secrets.get("firebase", None) 
         
-        if not firebase_config:
+        if not firebase_config or not firebase_config.get("private_key"):
             # Se não houver config, entra em modo SIMULADO
             st.session_state["db"] = "SIMULATED"
+            st.session_state["auth"] = "SIMULATED"
+            st.info("A contagem de anúncios usará um sistema SIMULADO: Credenciais Firebase não encontradas.")
             
         else:
             private_key_raw = firebase_config.get("private_key", "")
             
-            # Trata a chave privada se ela foi colada com aspas simples (e.g., '\n')
+            # --- TRATAMENTO CRÍTICO DA CHAVE PRIVADA ---
+            # O Streamlit armazena '\n' como '\\n' literal no TOML. Precisamos corrigir isso.
             if "\\n" in private_key_raw:
                 private_key = private_key_raw.replace("\\n", "\n")
             else:
@@ -139,7 +142,15 @@ if 'db' not in st.session_state:
 
             # Inicializa o Firebase Admin SDK
             if not firebase_admin._apps: 
-                cred = credentials.Certificate(service_account_info)
+                try:
+                    cred = credentials.Certificate(service_account_info)
+                except ValueError as ve:
+                    # Trata especificamente o erro de JSON/credencial mal formado (Comum)
+                    if "Private key must be a string or byte string" in str(ve) or "Failed to parse private key" in str(ve):
+                        raise Exception(f"ERRO FATAL DE CONFIGURAÇÃO: A chave privada do Firebase está mal formatada no secrets.toml. Erro: {ve}")
+                    else:
+                        raise ve # Lança outros erros de valor
+
                 # Inicializa com um nome de app específico
                 app = initialize_app(cred, name="anuncia_app_instance")
                 st.session_state['firebase_app'] = app
@@ -154,7 +165,7 @@ if 'db' not in st.session_state:
 
     except Exception as e:
         # Se houver erro na conexão (configuração errada), cai em modo simulado
-        st.info(f"A contagem de anúncios usará um sistema SIMULADO: {e}")
+        st.error(f"❌ Erro Crítico na Conexão Firebase. Contagem SIMULADA: {e}")
         st.session_state["db"] = "SIMULATED" 
         st.session_state["auth"] = "SIMULATED"
 
@@ -178,7 +189,6 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
     
     # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PREMIUM forçado)
-    # Compara o email logado com o email do desenvolvedor (Vinicius).
     if st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
         return {"ads_generated": 0, "plan_tier": "premium"} 
     
@@ -232,10 +242,9 @@ def handle_login(email: str, password: str):
         # Tentativa de obter o usuário para verificar existência
         user = st.session_state['auth'].get_user_by_email(email)
         
-        # NOTE: Em uma aplicação real, aqui seria feita a verificação de senha
-        # usando o Firebase Client SDK. Como estamos usando o Admin SDK para a demo,
-        # assumimos que se o usuário existe, o login é bem-sucedido para fins de demonstração
-        # da UI e do sistema de tiers.
+        # NOTA: O Firebase Admin SDK NÃO verifica a senha. Apenas confirma a existência.
+        # Em produção, use o Firebase Client SDK para login.
+        st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
         
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
@@ -497,7 +506,7 @@ if 'logged_in_user_email' not in st.session_state:
     st.session_state['logged_in_user_email'] = None
 
 
-st.title("✨ AnuncIA — O Gerador de Anúncios Inteligente")
+st.title("🤖 AnuncIA — Gerador de Copy de Alta Conversão") # Título melhorado
 
 # --- PAINEL DE LOGIN/REGISTRO NA SIDEBAR ---
 with st.sidebar:
@@ -545,7 +554,7 @@ with st.sidebar:
 if not st.session_state['logged_in_user_id']:
     st.info("Por favor, faça **Login** ou **Crie sua Conta** na barra lateral para começar seu teste grátis.")
 else:
-    # --- Verificação de Limite e Exibição de Status ---
+    # --- Verificação de Limite e Exibição de Status (Melhorado) ---
     user_id = st.session_state['logged_in_user_id']
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
@@ -563,17 +572,40 @@ else:
 
     st.markdown("---")
     
-    # Verificação de Desenvolvedor (Usando o e-mail logado)
-    if st.session_state['logged_in_user_email'] and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
-        status_text = "⭐ Acesso de Desenvolvedor (PREMIUM Ilimitado)"
-    else:
-        status_text = f"Nível de Acesso: **{tier_display_map.get(user_plan_tier, 'Plano Grátis')}**"
-    
-    if user_plan_tier == "free":
-        st.markdown(f"**Status:** {status_text}. Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
-    else:
-        st.markdown(f"**Status:** {status_text} (Uso Ilimitado) 🎉")
+    # Exibição do Status (Melhorado com UX)
+    tier_info_map = {
+        "free": {"icon": "🆓", "color": "blue", "text": "Plano Grátis"},
+        "essential": {"icon": "⚡", "color": "orange", "text": "Plano Essencial"},
+        "premium": {"icon": "👑", "color": "green", "text": "Plano Premium"}
+    }
+    current_tier_info = tier_info_map.get(user_plan_tier, tier_info_map["free"])
         
+    # Layout de status
+    col_status, col_upgrade_link = st.columns([2, 1])
+
+    with col_status:
+        if st.session_state['logged_in_user_email'] and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == clean_email_to_doc_id(DEVELOPER_EMAIL):
+            st.markdown(f"**Status:** ⭐ Acesso de Desenvolvedor (PREMIUM Ilimitado)")
+        else:
+            st.markdown(f"**Status:** {current_tier_info['icon']} **{current_tier_info['text']}**")
+            if user_plan_tier == "free":
+                st.markdown(f"**Uso:** **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+            else:
+                st.markdown("Uso Ilimitado! 🎉")
+
+    with col_upgrade_link:
+        if user_plan_tier == "free":
+            # Botão de Upgrade Flutuante
+            st.markdown(f"""
+                <div style="text-align: right; margin-top: 10px;" class="pro-button">
+                    <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank" style="text-decoration: none;">
+                        <button style="background-color: #52b2ff !important; font-size: 14px !important; padding: 8px 15px !important;">
+                            FAÇA UPGRADE AGORA
+                        </button>
+                    </a>
+                </div>
+                """, unsafe_allow_html=True)
+            
     st.markdown("---")
 
     # Botão de Upgrade na Sidebar
@@ -592,7 +624,6 @@ else:
             """, unsafe_allow_html=True)
             st.markdown("---")
         
-
     if user_plan_tier == "free" and ads_used >= FREE_LIMIT:
         display_upgrade_page(user_id)
         
@@ -619,10 +650,10 @@ else:
                     )
                 
                 with col_tone:
-                     tone = st.selectbox(
-                        "Tom de Voz:", 
-                        ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
-                    )
+                      tone = st.selectbox(
+                          "Tom de Voz:", 
+                          ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
+                      )
 
             # Recurso exclusivo do PREMIUM
             needs_video = st.checkbox(
@@ -697,29 +728,26 @@ else:
                         new_count = increment_ads_count(user_id, user_plan_tier)
                         
                         # 3. Exibição do resultado
-                        st.success(f"✅ Copy Gerada com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
+                        # Mensagem de sucesso (e aviso de limite para o Free)
+                        if user_plan_tier == "free":
+                            st.success(f"✅ Copy Gerada! Você tem mais **{max(0, FREE_LIMIT - new_count)}** anúncios grátis nesta sessão.")
+                        else:
+                            st.success("✅ Copy Ilimitada Gerada com Sucesso!")
                         
                         st.markdown("---")
-                        st.subheader("Resultado da Copy")
-                        
-                        # TÍTULO GANCHO
+                        st.subheader("Resultado Gerado Pela IA:")
+
+                        # Resultados Padrão (Todos os Planos)
                         display_result_box("🎯", "Título Gancho (Atenção)", api_result.get("titulo_gancho", "N/A"), "title_box")
-
-                        # COPY AIDA
                         display_result_box("📝", "Copy Principal (AIDA)", api_result.get("copy_aida", "N/A"), "copy_box")
-
-                        # CTA
                         display_result_box("📢", "Chamada para Ação (CTA)", api_result.get("chamada_para_acao", "N/A"), "cta_box")
-                        
-                        # SEGMENTAÇÃO
                         display_result_box("💡", "Ideias de Segmentação", api_result.get("segmentacao_e_ideias", "N/A"), "seg_box")
-                        
-                        
-                        # ROTEIRO DE VÍDEO E CAMPANHAS (EXCLUSIVO PREMIUM)
+
+                        # Resultados Premium (Se solicitado e no plano correto)
                         if is_premium and needs_video:
                             st.markdown("---")
                             st.subheader("💎 Conteúdo Premium: Estratégia de Vídeo e Campanhas")
-                            with st.container(border=True): # Destaque visual PREMIUM
+                            with st.container(border=True):
                                 # ROTEIRO DE VÍDEO
                                 with st.expander("🎬 Roteiro de Vídeo (Reels/TikTok)"):
                                     display_result_box("🎬", "Gancho (Hook) de 3 Segundos", api_result.get("gancho_video", "N/A"), "hook_box")
@@ -729,18 +757,37 @@ else:
                                 with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
                                     display_result_box("📈", "Títulos de Campanhas", api_result.get("sugestao_campanhas", "N/A"), "camp_box")
 
+                        # --- SEÇÃO DE FEEDBACK (Nova) ---
+                        st.markdown("---")
+                        st.subheader("Avalie a Qualidade da Copy:")
 
-# ----------------------------------------------------
-#               DEBUG E STATUS FINAL
-# ----------------------------------------------------
-st.sidebar.markdown("---")
-st.sidebar.markdown("##### Status do Sistema")
-if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-    st.sidebar.success("✅ Conexão Firebase OK")
-else:
-    st.sidebar.warning("⚠️ Firebase: MODO SIMULADO")
+                        col_rate, col_feedback = st.columns([1, 4])
+                        with col_rate:
+                            rating = st.select_slider(
+                                'Gostou do Resultado?',
+                                options=['Ruim 😭', 'Mais ou Menos 🤔', 'Bom 👍', 'Ótimo! 🚀'],
+                                key="rating_slider"
+                            )
+                        
+                        # Formulário/Caixa de Feedback
+                        with col_feedback:
+                            feedback_text = ""
+                            if rating == 'Ruim 😭':
+                                feedback_text = st.text_input("Diga-nos o que podemos melhorar (opcional):", key="feedback_text_input")
 
-if GEMINI_KEY:
-    st.sidebar.success("🔑 Chave de API OK")
-else:
-    st.sidebar.error("❌ Chave de API AUSENTE")
+                            # Botão e lógica de envio
+                            if st.button("Enviar Feedback", key="send_feedback_btn", use_container_width=True, disabled=(st.session_state.get("db") == "SIMULATED" or rating == "Mais ou Menos 🤔")):
+                                if st.session_state["db"] != "SIMULATED":
+                                    feedback_data = {
+                                        "user_id": user_id,
+                                        "rating": rating,
+                                        "text": feedback_text,
+                                        "timestamp": firestore.SERVER_TIMESTAMP,
+                                        "input_desc": description[:100], # Salva um pedaço da descrição para referência
+                                        "result": api_result.get("copy_aida", "N/A")[:100] # Salva um pedaço do resultado
+                                    }
+                                    # Salva em uma nova coleção 'feedback'
+                                    st.session_state["db"].collection("feedback").add(feedback_data)
+                                    st.success("Feedback enviado! Isso nos ajuda a melhorar a IA.")
+                                else:
+                                    st.error("Funcionalidade de Feedback desativada em modo SIMULADO.")
