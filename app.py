@@ -2,75 +2,144 @@ import streamlit as st
 import os
 import time
 import re
-# CORREÇÃO 1: Importar o módulo principal 'firebase_admin' para usar '_apps'
+import requests 
+import json     
 import firebase_admin 
-from firebase_admin import credentials, initialize_app, firestore
+from firebase_admin import credentials, initialize_app, firestore 
 from google.cloud.firestore import Client
-from typing import Dict, Any
-
+from typing import Dict, Any, Optional
 
 # --- Configurações & Chaves (Puxadas do secrets.toml) ---
-# A chave OpenAI é apenas um placeholder de demonstração.
-OPENAI_KEY = st.secrets.get("OPENAI_API_KEY", None) 
-FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3)) # Garante que o limite é um inteiro
+GEMINI_API_KEY = st.secrets.get("OPENAI_API_KEY", None) 
+FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
+
+API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+MODEL_NAME = "gemini-2.5-flash" 
 
 # ----------------------------------------------------
 #               CONFIGURAÇÃO DO FIREBASE
 # ----------------------------------------------------
-
-# Verifica se o Firebase já foi inicializado na sessão
+# (O bloco de inicialização do Firebase é mantido inalterado)
 if 'db' not in st.session_state:
     st.session_state['db'] = None
     
     try:
-        # 1. Obter as credenciais do secrets.toml
         firebase_config = st.secrets.get("firebase", None)
         
         if not firebase_config:
             st.warning("⚠️ Configuração [firebase] não encontrada. O app funcionará no MODO OFFLINE/SIMULAÇÃO.")
         else:
-            # Corrige a private_key (substitui \\n por \n)
             private_key = firebase_config.get("private_key", "").replace("\\n", "\n")
             
-            # Cria o objeto de credenciais de serviço
             service_account_info = {
                 k: v for k, v in firebase_config.items() if k not in ["private_key"]
             }
             service_account_info["private_key"] = private_key
 
-            # 2. Inicializar o Firebase Admin SDK (só se não estiver inicializado)
-            # CORREÇÃO 2: Usa 'firebase_admin._apps' em vez de 'firestore._apps'
-            if not firebase_admin._apps:
+            if not firebase_admin._apps: 
                 cred = credentials.Certificate(service_account_info)
-                # Inicializa o app com um nome para evitar o erro de re-inicialização
                 initialize_app(cred, name="anuncia_app")
             
-            # 3. Conectar ao Firestore
-            # Tenta usar o client associado ao app inicializado
             db_client = firestore.client(app=firebase_admin.get_app("anuncia_app"))
-            st.session_state["db"] = db_client # Armazena o cliente no estado da sessão
+            st.session_state["db"] = db_client 
             st.success("✅ Conexão Firebase/Firestore estabelecida.")
 
     except Exception as e:
-        # Nota: Deixa este erro genérico, pois pode ser problema de Private Key ou Regra de Segurança.
         st.error(f"❌ Erro ao inicializar Firebase: {e}")
         st.info("A contagem de anúncios usará um sistema de contagem SIMULADA.")
-        st.session_state["db"] = "SIMULATED" # Sinaliza que está em modo de simulação
+        st.session_state["db"] = "SIMULATED"
 
 
 # ----------------------------------------------------
-#           FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
+#               FUNÇÃO DE CHAMADA À IA OTIMIZADA
 # ----------------------------------------------------
 
+def call_gemini_api(product_type: str, description: str) -> Optional[Dict[str, str]]:
+    """
+    Chama a API do Gemini com um prompt estruturado para gerar o anúncio.
+    Otimizado para copywriting de alta conversão usando o framework AIDA (Atenção, Interesse, Desejo, Ação).
+    """
+    if not GEMINI_API_KEY:
+        st.error("Chave da API não configurada. Verifique o secrets.toml.")
+        return None
+    
+    # NOVO SYSTEM PROMPT: Mais focado em conversão e gatilhos mentais
+    system_prompt = (
+        "Você é o Copywriter-Chefe da agência 'AnuncIA'. Sua missão é gerar um anúncio que converte como fogo. "
+        "A copy deve ser estruturada seguindo o framework AIDA (Atenção, Interesse, Desejo, Ação), "
+        "com uso de gatilhos mentais de Escassez e Prova Social. "
+        "O idioma de saída DEVE ser Português Brasileiro (PT-BR), com emojis e linguagem persuasiva. "
+        "Sua resposta DEVE ser um objeto JSON válido, contendo obrigatoriamente 4 chaves: "
+        "'titulo_gancho', 'copy_aida', 'call_to_action', e 'segmentacao_e_ideias'. "
+        "Não inclua qualquer outro texto antes ou depois do JSON."
+    )
+    
+    # Prompt do Usuário: Os dados do formulário
+    user_prompt = (
+        f"Gere um anúncio persuasivo de alta conversão. "
+        f"Tipo de Produto: {product_type}. "
+        f"Descrição Detalhada e Foco: '{description}'. "
+        f"A copy_aida deve ter no máximo 1500 caracteres, ser focada nos benefícios (não nas características) e incluir um elemento de urgência ou escassez."
+    )
+
+    # Configuração de Geração (Schema de saída JSON aprimorado)
+    generation_config = {
+        "responseMimeType": "application/json",
+        "responseSchema": {
+            "type": "OBJECT",
+            "properties": {
+                "titulo_gancho": {"type": "STRING", "description": "Um título curto e agressivo (gancho) para capturar a atenção (max 80 caracteres)."},
+                "copy_aida": {"type": "STRING", "description": "O corpo do texto principal do anúncio, seguindo AIDA (Atenção, Interesse, Desejo, Ação)."},
+                "call_to_action": {"type": "STRING", "description": "Uma chamada para ação direta, com senso de urgência (ex: 'Últimas 24h! Garanta sua vaga')."},
+                "segmentacao_e_ideias": {"type": "STRING", "description": "Sugestões de público-alvo (Facebook Ads) e uma breve ideia de imagem/vídeo para o anúncio."}
+            },
+            "required": ["titulo_gancho", "copy_aida", "call_to_action", "segmentacao_e_ideias"]
+        }
+    }
+
+    payload = {
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "config": generation_config
+    }
+
+    headers = {'Content-Type': 'application/json'}
+    
+    try:
+        response = requests.post(f"{API_URL}?key={GEMINI_API_KEY}", headers=headers, data=json.dumps(payload))
+        response.raise_for_status() 
+        
+        result = response.json()
+        
+        # Tenta extrair a string JSON
+        json_string = result['candidates'][0]['content']['parts'][0]['text']
+        
+        # Tenta parsear a string JSON
+        return json.loads(json_string)
+        
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Erro HTTP: Verifique se sua chave da API é válida e se o modelo está acessível.")
+        st.info(f"Detalhes da Resposta: {response.text[:200]}...")
+    except (KeyError, json.JSONDecodeError) as e:
+        st.error(f"Erro ao processar a resposta da IA. O formato JSON esperado pode ter sido violado.")
+        st.code(f"Resposta bruta: {json_string}", language='json')
+    except Exception as e:
+        st.error(f"Erro inesperado na chamada da API: {e}")
+        
+    return None
+
+
+# ----------------------------------------------------
+# FUNÇÕES DE CONTROLE DE USO (FIREBASE/SIMULADO)
+# ----------------------------------------------------
+# (Manter o código de get_user_data e increment_ads_count aqui)
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca)."""
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        # Modo Firebase
         user_ref = st.session_state["db"].collection("users").document(user_id)
         doc = user_ref.get()
         if doc.exists:
             return doc.to_dict()
-    # Modo Simulado (Fallback)
     return st.session_state.get(f"user_{user_id}", {"ads_generated": 0, "plan": "free"})
 
 def increment_ads_count(user_id: str):
@@ -79,20 +148,18 @@ def increment_ads_count(user_id: str):
     new_count = user_data.get("ads_generated", 0) + 1
     
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        # Modo Firebase
         user_ref = st.session_state["db"].collection("users").document(user_id)
-        # Atualiza o Firestore
         user_ref.set({
             "ads_generated": new_count,
             "last_used": firestore.SERVER_TIMESTAMP,
             "plan": user_data.get("plan", "free")
         }, merge=True)
     else:
-        # Modo Simulado (apenas para a sessão Streamlit atual)
         user_data["ads_generated"] = new_count
         st.session_state[f"user_{user_id}"] = user_data 
 
     return new_count
+
 
 # ----------------------------------------------------
 #           IMPLEMENTAÇÃO DE LOGIN SIMPLIFICADO
@@ -104,7 +171,6 @@ if 'logged_in_user_id' not in st.session_state:
 st.set_page_config(page_title="AnuncIA - Gerador de Anúncios", layout="centered")
 st.title("✨ AnuncIA — O Gerador de Anúncios Inteligente")
 
-# Área de Login/Identificação na Sidebar
 with st.sidebar:
     st.title("🔒 Login/Acesso")
     email_input = st.text_input("Seu E-mail (Para controle de uso)", 
@@ -112,15 +178,12 @@ with st.sidebar:
     
     if st.button("Acessar / Simular Login"):
         if "@" in email_input:
-            # 1. Aplica a lógica anti-abuso de e-mail alias (ignora '+alias')
             clean_email = email_input
             if "+" in email_input:
                 local_part, domain = email_input.split("@")
                 local_part = local_part.split("+")[0]
                 clean_email = f"{local_part}@{domain}"
             
-            # 2. Cria um ID limpo para usar como Document ID no Firestore
-            # Subistitui caracteres que podem dar problema no Firebase ID
             user_doc_id = re.sub(r'[^\w\-@\.]', '_', clean_email)
             
             st.session_state['logged_in_user_id'] = user_doc_id
@@ -154,33 +217,55 @@ else:
         with st.form("input_form"):
             st.subheader("🛠️ Crie Seu Anúncio Profissional")
             
-            # Campos do formulário...
             product_type = st.selectbox("Tipo de produto", ["Ambos (Físico e Digital)", "Produto físico", "Produto digital"])
-            description = st.text_area("Descrição do produto e o que você quer vender:", max_chars=800)
+            description = st.text_area("Descrição do produto e o que você quer vender (máx. 800 caracteres):", max_chars=800)
             
-            # Botão de submissão
             submitted = st.form_submit_button("Gerar Anúncio com IA")
 
         if submitted:
-            # Lógica de processamento e chamada de API (simulação)
-            with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
-                time.sleep(2) # Simula o tempo de API
-                
-                # SIMULAÇÃO DE GERAÇÃO
-                simulated_title = f"✨ Venda {product_type}: {description[:40]}..."
-                
-                # 1. Incrementa a contagem no Firebase/Simulação
-                new_count = increment_ads_count(user_id)
-                
-                # 2. Exibição do resultado (simulação)
-                st.success(f"✅ Anúncio Gerado com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
-                
-                st.markdown(f"### 🎯 Título Sugerido: {simulated_title}")
-                st.markdown(f"**Texto:** Sua descrição foi transformada em um texto persuasivo para {product_type}. Use CTAs fortes e gatilhos mentais!")
-                st.markdown(f"**Grupos Recomendados:** Marketing Digital BR, Vendas {product_type}, Ofertas Online.")
-                st.markdown("---")
+            if not description:
+                st.error("Por favor, insira uma descrição do produto para gerar o anúncio.")
+            else:
+                with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
+                    
+                    # Chama a função real da API
+                    ad_content = call_gemini_api(product_type, description)
 
-    # Botão de debug (útil para ver se o Firebase está funcionando)
+                    if ad_content:
+                        # 1. Incrementa a contagem no Firebase
+                        new_count = increment_ads_count(user_id)
+                        
+                        # 2. Exibição do resultado REAL da IA
+                        st.success(f"✅ Anúncio Gerado com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
+                        st.markdown("---")
+                        
+                        # Exibição Otimizada (UI/UX)
+                        
+                        st.markdown(f"## 💥 {ad_content.get('titulo_gancho', 'Título Gerado')}")
+                        st.caption("Pronto para usar em redes sociais e anúncios.")
+                        st.markdown("---")
+
+                        # Displaying the main copy
+                        st.markdown("### ✍️ Corpo do Anúncio (AIDA)")
+                        st.code(ad_content.get('copy_aida', 'Erro na copy'), language='markdown')
+
+                        # Displaying CTA and Segmentation side-by-side
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("### 📢 Chamada para Ação (CTA)")
+                            st.code(ad_content.get('call_to_action', 'Erro no CTA'), language='markdown')
+                        
+                        with col2:
+                            st.markdown("### 🧠 Estratégia e Segmentação")
+                            st.info(ad_content.get('segmentacao_e_ideias', 'Erro na segmentação'))
+                        
+                        st.markdown("---")
+                        
+                    else:
+                        st.error("Falha ao gerar o anúncio. Tente novamente ou verifique as chaves da API.")
+
+    # Botão de debug
     if st.session_state["db"] != "SIMULATED":
         if st.button("Ver Meus Dados no Firestore (Debug)"):
             st.json(user_data)
