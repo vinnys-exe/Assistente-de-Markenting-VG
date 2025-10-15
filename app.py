@@ -64,8 +64,11 @@ a[href*="LINK_PARA_PAGAMENTO"] button {
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") # Chave para testes futuros
+# A chave GEMINI_API_KEY deve ser lida a partir do seu secrets.toml
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") 
 FREE_LIMIT = int(st.secrets.get("DEFAULT_FREE_LIMIT", 3))
+
+# Puxa o e-mail do secrets.toml para dar acesso PRO
 DEVELOPER_EMAIL = st.secrets.get("DEVELOPER_EMAIL", "")
 
 # ----------------------------------------------------
@@ -121,6 +124,7 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
     
     # 1. VERIFICAÇÃO DE DESENVOLVEDOR (WHITELIST)
+    # A variável DEVELOPER_EMAIL deve ser lida corretamente do secrets.toml
     dev_email_clean = DEVELOPER_EMAIL.lower()
     
     # O user_id é o e-mail limpo e formatado como document ID (sem caracteres especiais, exceto @ . -)
@@ -372,7 +376,11 @@ else:
 
     st.markdown("---")
     if is_pro_user:
-        status_text = "⭐ Acesso de Desenvolvedor (PRO Ilimitado)" if user_id.lower() == re.sub(r'[^\w\-@\.]', '_', DEVELOPER_EMAIL.lower()) else "💎 Plano PRO (Uso Ilimitado)"
+        # A verificação do desenvolvedor usa o ID do documento, que é o e-mail limpo
+        if user_id.lower() == re.sub(r'[^\w\-@\.]', '_', DEVELOPER_EMAIL.lower()):
+             status_text = "⭐ Acesso de Desenvolvedor (PRO Ilimitado)"
+        else:
+             status_text = "💎 Plano PRO (Uso Ilimitado)"
         st.markdown(f"**Status:** {status_text}")
     else:
         st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
