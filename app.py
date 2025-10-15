@@ -365,7 +365,7 @@ def handle_logout():
 
 
 # ----------------------------------------------------
-#            FUNÇÕES DE CHAMADA DA API (ATUALIZADAS)
+#            FUNÇÕES DE CHAMADA DA API (MANTIDAS)
 # ----------------------------------------------------
 
 def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool, image_b64: str, mime_type: str) -> Union[Dict, str]:
@@ -817,10 +817,13 @@ A IA irá CORRIGIR, REESCREVER e OTIMIZAR seu esboço para alta conversão.""",
         if submitted:
             if not description:
                 st.error("Por favor, forneça um esboço de texto ou descrição detalhada do produto para a IA.")
+                st.stop() # CORREÇÃO 1
             elif needs_video and not is_premium and not is_dev:
                 st.error("⚠️ **Recurso Premium:** A Geração de Roteiro de Vídeo e Campanhas A/B é exclusiva do Plano Premium.")
+                st.stop()
             elif not GEMINI_KEY:
                 st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida.")
+                st.stop() # CORREÇÃO 2
                 
             else:
                 image_b64 = file_to_base64(uploaded_file)
@@ -833,7 +836,7 @@ A IA irá CORRIGIR, REESCREVER e OTIMIZAR seu esboço para alta conversão.""",
                 if "error" in api_copy_result:
                     st.error(f"❌ Erro na Geração da Copy: {api_copy_result['error']}")
                     st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
-                    return
+                    st.stop() # CORREÇÃO 3 (Originalmente 'return')
 
                 # --- 2. CHAMADA DA ESTRATÉGIA ---
                 with st.spinner("📈 Gerando a Estratégia de Canais e Público-Alvo..."):
