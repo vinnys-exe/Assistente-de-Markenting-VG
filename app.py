@@ -11,10 +11,10 @@ from typing import Dict, Any, Union
 import re 
 import base64
 
-# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO (ATUALIZADO PARA PROFISSIONAL) ---
+# --- CONFIGURAÇÕES DO APLICATIVO E CSS CUSTOMIZADO (V4.0) ---
 st.set_page_config(page_title="✨ AnuncIA - Gerador de Anúncios", layout="centered")
 
-# --- CSS PROFISSIONAL V3.0 ---
+# --- CSS PROFISSIONAL V4.0 ---
 st.markdown("""
 <style>
 /* 1. CONFIGURAÇÃO BASE GERAL */
@@ -122,7 +122,6 @@ div.stButton > button:first-child:hover {
 
 
 # --- CONFIGURAÇÕES & CHAVES (Puxadas do secrets.toml) ---
-# Usamos .get() com um valor padrão para evitar erro se a seção/chave não existir
 GEMINI_KEY = st.secrets.get("gemini", {}).get("GEMINI_API_KEY", "") 
 FREE_LIMIT = int(st.secrets.get("app", {}).get("DEFAULT_FREE_LIMIT", 3))
 DEVELOPER_EMAIL = st.secrets.get("app", {}).get("DEVELOPER_EMAIL", "seu-email-de-login-admin@exemplo.com") 
@@ -189,12 +188,14 @@ if st.session_state['db'] is None:
 
 def clean_email_to_doc_id(email: str) -> str:
     """Limpa o e-mail para usar como Document ID e comparações."""
+    # Garante que o e-mail seja em minúsculas, sem espaços e remove aliases tipo '+teste'
     clean_email = email.lower().strip()
     if "+" in clean_email:
         local_part, domain = clean_email.split("@")
         local_part = local_part.split("+")[0]
         clean_email = f"{local_part}@{domain}"
     
+    # Substitui caracteres especiais restantes por '_' (para Document ID)
     user_doc_id = re.sub(r'[^\w@\.\-]', '_', clean_email)
     return user_doc_id
 
@@ -204,8 +205,10 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PREMIUM forçado)
     if st.session_state.get('logged_in_user_email'):
         logged_email_clean = clean_email_to_doc_id(st.session_state['logged_in_user_email'])
+        
+        # O PONTO CRÍTICO: Compara o e-mail logado LIMPO com o DEVELOPER_EMAIL LIMPO
         if logged_email_clean == DEVELOPER_EMAIL_CLEAN:
-            # Se o e-mail logado for o e-mail do DEVELOPER_EMAIL_CLEAN (limpo), força o plano PREMIUM
+            # Se o e-mail for o Admin, força o plano PREMIUM (ilimitado)
             return {"ads_generated": 0, "plan_tier": "premium"} 
     
     # 2. MODO FIREBASE
@@ -223,6 +226,7 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
 
 def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     """Incrementa a contagem de anúncios SOMENTE se o plano for 'free'."""
+    # Qualquer plano que não seja 'free' é ilimitado (Essencial ou Premium)
     if current_plan_tier != "free":
         return 0 
         
@@ -260,6 +264,7 @@ def handle_login(email: str, password: str):
 
         user = st.session_state['auth'].get_user_by_email(email, app=app_instance) 
         
+        # Simula o login bem-sucedido
         st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
         
         st.session_state['logged_in_user_email'] = email
@@ -401,11 +406,11 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, user_pl
     return {"error": "Não foi possível conectar após várias tentativas."}
 
 # ----------------------------------------------------
-#           FUNÇÕES DE EXIBIÇÃO DA UI
+#           FUNÇÕES DE EXIBIÇÃO DA UI (ATUALIZADA)
 # ----------------------------------------------------
 
 def display_upgrade_page(user_id: str):
-    """Exibe a página de vendas/upgrade com 3 planos."""
+    """Exibe a página de vendas/upgrade com 3 planos (Com features corrigidas)."""
     st.markdown("---")
     st.subheader("🚀 Escolha seu Plano e Venda Mais!")
     st.warning("🚨 **Limite Gratuito Atingido!** Para continuar, selecione um plano.")
@@ -439,7 +444,7 @@ def display_upgrade_page(user_id: str):
             """, unsafe_allow_html=True
         )
     
-    # Plano 2: Essencial (Ancora de preço / Gateway)
+    # Plano 2: Essencial (Com Anúncios Ilimitados - Corrigido)
     with col2:
         st.markdown(
             f"""
@@ -450,10 +455,10 @@ def display_upgrade_page(user_id: str):
                     <p>por mês</p>
                 </div>
                 <ul style="list-style-type: '✅ '; padding-left: 20px; font-size: 0.95em;">
-                    <li>Anúncios Ilimitados (Sem Restrições)</li>
+                    <li>**Anúncios Ilimitados** (Sem Restrições)</li>
                     <li>Uso Completo (AIDA e Segmentação)</li>
-                    <li><span style="color: #999;">Roteiros de Vídeo (Reels/TikTok)</span></li>
-                    <li><span style="color: #999;">Sugestões de Campanhas A/B</span></li>
+                    <li><span style="color: #999;">❌ Roteiros de Vídeo (Exclusivo Premium)</span></li>
+                    <li><span style="color: #999;">❌ Sugestões de Campanhas A/B (Exclusivo Premium)</span></li>
                 </ul>
                 <div style="text-align: center; margin-top: 15px;" class="pro-button">
                     <a href="LINK_PARA_PAGAMENTO_ESSENCIAL" target="_blank" style="text-decoration: none;">
@@ -466,7 +471,7 @@ def display_upgrade_page(user_id: str):
             """, unsafe_allow_html=True
         )
 
-    # Plano 3: Premium (Melhor Oferta e Destaque)
+    # Plano 3: Premium (Com Anúncios Ilimitados e Exclusivos - Corrigido)
     with col3:
         st.markdown(
             f"""
@@ -478,7 +483,7 @@ def display_upgrade_page(user_id: str):
                     <p>por mês **(Mais Vantajoso)**</p>
                 </div>
                 <ul style="list-style-type: '✅ '; padding-left: 20px; font-size: 0.95em;">
-                    <li>Anúncios Ilimitados (Sem Restrições)</li>
+                    <li>**Anúncios Ilimitados** (Sem Restrições)</li>
                     <li>Uso Completo (AIDA e Segmentação)</li>
                     <li>Geração de **Roteiros de Vídeo**</li>
                     <li>Sugestões de **Campanhas A/B** (Exclusivo!)</li>
@@ -500,7 +505,6 @@ def display_upgrade_page(user_id: str):
 
 def display_result_box(icon: str, title: str, content: str, key: str):
     """Exibe o conteúdo em um text_area com botão de cópia nativo e ícone."""
-    # Usamos o container para a borda visual, e o text_area para o recurso de cópia.
     with st.container(border=True):
         st.markdown(f"**{icon} {title}**")
         st.text_area(
@@ -584,6 +588,7 @@ else:
         is_dev = st.session_state.get('logged_in_user_email') and clean_email_to_doc_id(st.session_state['logged_in_user_email']) == DEVELOPER_EMAIL_CLEAN
         
         if is_dev:
+            # PONTO DE VERIFICAÇÃO DE ADMIN (CORRIGIDO)
             st.markdown(f"**Status:** ⭐ Acesso de Desenvolvedor (PREMIUM Ilimitado)")
         else:
             st.markdown(f"**Status:** {current_tier_info['icon']} **{current_tier_info['text']}**")
