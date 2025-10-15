@@ -122,7 +122,7 @@ def initialize_firebase():
     APP_NAME = "anuncia_app_instance"
     
     try:
-        # 1. Tenta obter a instância, se já existir
+        # 1. Tenta obter a instância, se já existir (Resolve o erro inicial)
         app = firebase_admin.get_app(APP_NAME)
         
     except ValueError:
@@ -147,7 +147,7 @@ def initialize_firebase():
             }
             service_account_info["private_key"] = private_key
 
-            # Inicializa o app
+            # Inicializa o app com o nome definido
             cred = credentials.Certificate(service_account_info)
             app = initialize_app(cred, name=APP_NAME)
             
@@ -156,11 +156,11 @@ def initialize_firebase():
             st.error(f"❌ Erro Crítico na Inicialização Firebase. Contagem SIMULADA: {e}")
             return "SIMULATED", "SIMULATED", None
 
-    # 3. Retorna os objetos de conexão (se o app for inicializado ou obtido com sucesso)
+    # 3. Retorna os objetos de conexão
     db_client = firestore.client(app=app)
     return db_client, auth, app
 
-# Chamada principal para inicialização, armazenando no session_state (Executa apenas uma vez)
+# Chamada principal para inicialização (Executa apenas uma vez)
 if st.session_state['db'] is None:
     st.session_state['db'], st.session_state['auth'], st.session_state['firebase_app'] = initialize_firebase()
 
@@ -170,14 +170,13 @@ if st.session_state['db'] is None:
 # ----------------------------------------------------
 
 def clean_email_to_doc_id(email: str) -> str:
-    """Limpa o e-mail para usar como Document ID e comparações (removendo alias '+' e caracteres especiais)."""
+    """Limpa o e-mail para usar como Document ID e comparações."""
     clean_email = email.lower().strip()
     if "+" in clean_email:
         local_part, domain = clean_email.split("@")
         local_part = local_part.split("+")[0]
         clean_email = f"{local_part}@{domain}"
     
-    # Mantém apenas letras, números, @, hifens e pontos. Substitui outros por "_"
     user_doc_id = re.sub(r'[^\w@\.\-]', '_', clean_email)
     return user_doc_id
 
@@ -190,7 +189,6 @@ def get_user_data(user_id: str) -> Dict[str, Any]:
     
     # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
-        # Usamos o UID para buscar o documento
         user_ref = st.session_state["db"].collection("users").document(user_id) 
         doc = user_ref.get()
         if doc.exists:
@@ -226,54 +224,66 @@ def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     return new_count
 
 # ----------------------------------------------------
-#           FUNÇÕES DE AUTENTICAÇÃO
+#           FUNÇÕES DE AUTENTICAÇÃO (CORRIGIDO)
 # ----------------------------------------------------
 
 def handle_login(email: str, password: str):
-    """Tenta autenticar um usuário com e-mail e senha."""
+    """Tenta autenticar um usuário com e-mail e senha, referenciando o app nomeado."""
     try:
         if st.session_state['auth'] == "SIMULATED":
             st.error("Serviço de autenticação desativado. Login simulado não suportado neste modo.")
             return
 
-        # Tentativa de obter o usuário para verificar existência
-        user = st.session_state['auth'].get_user_by_email(email)
+        # --- CORREÇÃO: Pega a instância do app nomeado ---
+        app_instance = st.session_state['firebase_app']
+        if app_instance is None or app_instance == "SIMULATED":
+            st.error("Erro Crítico: Referência do aplicativo Firebase não encontrada ou está em modo SIMULADO.")
+            return
+
+        # Tenta obter o usuário, usando explicitamente a instância nomeada (app=app_instance)
+        user = st.session_state['auth'].get_user_by_email(email, app=app_instance) 
         
-        # NOTA: O Firebase Admin SDK NÃO verifica a senha. Apenas confirma a existência.
         st.warning("Aviso: Login efetuado (usuário encontrado). Em uma aplicação real, a verificação de senha é feita com o Firebase Client SDK.")
         
         st.session_state['logged_in_user_email'] = email
         st.session_state['logged_in_user_id'] = user.uid
         st.success(f"Bem-vindo(a), {email}!")
-        st.experimental_rerun() # Força a atualização da tela
+        st.experimental_rerun()
         
     except firebase_admin._auth_utils.UserNotFoundError:
         st.error("Erro: Usuário não encontrado. Verifique seu e-mail e senha.")
     except Exception as e:
-        st.error(f"Erro no login: {e}")
+        st.error(f"Erro no login: {e}") # Exibe o erro
 
 def handle_register(email: str, password: str, username: str, phone: str):
-    """Cria um novo usuário e salva dados adicionais no Firestore."""
+    """Cria um novo usuário, referenciando o app nomeado e salva dados adicionais no Firestore."""
     try:
         if st.session_state['auth'] == "SIMULATED":
             st.error("Serviço de autenticação desativado. Registro simulado não suportado neste modo.")
             return
+            
+        # --- CORREÇÃO: Pega a instância do app nomeado ---
+        app_instance = st.session_state['firebase_app']
+        if app_instance is None or app_instance == "SIMULATED":
+            st.error("Erro Crítico: Referência do aplicativo Firebase não encontrada ou está em modo SIMULADO.")
+            return
 
-        # 1. Cria o usuário no Firebase Auth
+        # 1. Cria o usuário no Firebase Auth, usando explicitamente a instância nomeada (app=app_instance)
         user = st.session_state['auth'].create_user(
             email=email,
             password=password,
-            display_name=username
+            display_name=username,
+            app=app_instance 
         )
 
-        # 2. Salva os dados adicionais no Firestore (usando o UID como ID)
+        # 2. Salva os dados adicionais no Firestore
         if st.session_state["db"] != "SIMULATED":
             st.session_state["db"].collection("users").document(user.uid).set({
                 "email": email,
                 "username": username,
                 "phone": phone if phone else None,
                 "created_at": firestore.SERVER_TIMESTAMP,
-                "plan_tier": "free", # Começa no plano grátis
+                "plan_tier": "free", 
                 "ads_generated": 0
             })
         
@@ -753,10 +763,8 @@ else:
                         with col_feedback:
                             feedback_text = ""
                             if rating == 'Ruim 😭':
-                                # Mantenha a chave "feedback_text_input" para que o estado seja salvo
                                 feedback_text = st.text_input("Diga-nos o que podemos melhorar (opcional):", key="feedback_text_input") 
                             
-                            # Condição para desabilitar o botão de envio se o rating for neutro, ou se for modo SIMULADO
                             disable_send = st.session_state.get("db") == "SIMULATED" or rating == "Mais ou Menos 🤔"
 
                             # Botão e lógica de envio
@@ -770,9 +778,7 @@ else:
                                         "input_desc": description[:100], 
                                         "result": api_result.get("copy_aida", "N/A")[:100] 
                                     }
-                                    # Salva em uma nova coleção 'feedback'
                                     st.session_state["db"].collection("feedback").add(feedback_data)
                                     st.success("Feedback enviado! Isso nos ajuda a melhorar a IA.")
                                 else:
-                                    # Esta linha não deve ser alcançada se o botão estiver desabilitado, mas é bom para debug.
                                     st.error("Funcionalidade de Feedback desativada em modo SIMULADO.")
