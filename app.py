@@ -48,7 +48,7 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
     transition: all 0.3s ease-in-out;
 }
 
-/* Estilo para o botão PRO (upgrade na sidebar) */
+/* Estilo para o botão PRO (upgrade na sidebar e na tela de planos) */
 .pro-button a button {
     background-color: #52b2ff !important;
     color: white !important;
@@ -58,8 +58,39 @@ div.stButton > button:first-child, .stMultiSelect, .stSelectbox {
     font-size: 16px !important;
     cursor: pointer !important;
     font-weight: bold;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15); /* Adiciona sombra para destaque */
+    transition: all 0.2s;
+}
+.pro-button a button:hover {
+    background-color: #007bff !important;
+    transform: translateY(-2px);
 }
 
+/* Estilo para o cartão de plano (Tiered Pricing) */
+.plan-card {
+    padding: 15px;
+    border-radius: 12px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.plan-highlight {
+    border: 3px solid #ff4b4b; /* Vermelho/laranja de destaque */
+    background-color: #fff0f0;
+    box-shadow: 0 6px 12px rgba(255, 75, 75, 0.2);
+    transform: scale(1.02);
+}
+.price-tag {
+    font-size: 2.5em;
+    font-weight: bold;
+    margin: 5px 0;
+}
+.strike-through {
+    text-decoration: line-through;
+    color: #888;
+    font-size: 0.9em;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,7 +118,6 @@ if 'db' not in st.session_state:
         else:
             private_key_raw = firebase_config.get("private_key", "")
             
-            # Limpa quebras de linha (necessário se não for formatado com aspas triplas no toml)
             if "\\n" in private_key_raw:
                 private_key = private_key_raw.replace("\\n", "\n")
             else:
@@ -128,24 +158,29 @@ def clean_email_to_doc_id(email: str) -> str:
 def get_user_data(user_id: str) -> Dict[str, Any]:
     """Busca os dados do usuário no Firestore (ou simula a busca), verificando o acesso dev."""
     
-    # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PRO forçado)
+    # 1. VERIFICAÇÃO DE DESENVOLVEDOR (Plano PREMIUM forçado)
     dev_doc_id = clean_email_to_doc_id(DEVELOPER_EMAIL)
     if user_id.lower() == dev_doc_id:
-        return {"ads_generated": 0, "plan": "pro"} 
+        # O DEV sempre tem o tier mais alto ('premium' na UI)
+        return {"ads_generated": 0, "plan_tier": "premium"} 
     
     # 2. MODO FIREBASE
     if st.session_state.get("db") and st.session_state["db"] != "SIMULATED":
         user_ref = st.session_state["db"].collection("users").document(user_id)
         doc = user_ref.get()
         if doc.exists:
-            return doc.to_dict()
+            # Garante que o campo 'plan' seja 'free', 'essential' ou 'premium'
+            data = doc.to_dict()
+            data['plan_tier'] = data.get('plan_tier', 'free') # Default para 'free'
+            return data
     
     # 3. MODO SIMULADO (Fallback)
-    return st.session_state.get(f"user_{user_id}", {"ads_generated": 0, "plan": "free"})
+    data = st.session_state.get(f"user_{user_id}", {"ads_generated": 0, "plan_tier": "free"})
+    return data
 
-def increment_ads_count(user_id: str, current_plan: str) -> int:
+def increment_ads_count(user_id: str, current_plan_tier: str) -> int:
     """Incrementa a contagem de anúncios SOMENTE se o plano for 'free'."""
-    if current_plan != "free":
+    if current_plan_tier != "free":
         return 0 
         
     user_data = get_user_data(user_id)
@@ -157,7 +192,7 @@ def increment_ads_count(user_id: str, current_plan: str) -> int:
         user_ref.set({
             "ads_generated": new_count,
             "last_used": firestore.SERVER_TIMESTAMP,
-            "plan": user_data.get("plan", "free")
+            "plan_tier": user_data.get("plan_tier", "free")
         }, merge=True)
     else:
         # Modo Simulado
@@ -170,12 +205,16 @@ def increment_ads_count(user_id: str, current_plan: str) -> int:
 #           FUNÇÕES DE CHAMADA DA API (GEMINI)
 # ----------------------------------------------------
 
-def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_user: bool, needs_video: bool) -> Union[Dict, str]:
+def call_gemini_api(user_description: str, product_type: str, tone: str, user_plan_tier: str, needs_video: bool) -> Union[Dict, str]:
     """Chama a API (simulando Gemini/OpenAI) para gerar copy em formato JSON."""
     
     api_key = GEMINI_KEY
     if not api_key:
         return {"error": "Chave de API (GEMINI_API_KEY) não configurada no secrets.toml."}
+
+    # Verifica os tiers do plano
+    is_essential_or_better = (user_plan_tier in ["essential", "premium"])
+    is_premium = (user_plan_tier == "premium")
 
     # 1. CONSTRUÇÃO DO PROMPT E SCHEMA
     system_instruction = f"""
@@ -200,11 +239,17 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_
         "propertyOrdering": ["titulo_gancho", "copy_aida", "chamada_para_acao", "segmentacao_e_ideias"]
     }
 
-    if is_pro_user and needs_video:
-        system_instruction += "\n\n⚠️ INSTRUÇÃO PRO: Além da copy, você DEVE gerar um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed."
-        output_schema['properties']['gancho_video'] = {"type": "STRING", "description": "Um HOOK (gancho) de 3 segundos que interrompe a rolagem do feed (ex: 'Não use isso para perder peso!')."}
+    # ADICIONA RECURSOS PREMIUM
+    if is_premium and needs_video:
+        system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere um roteiro de vídeo de 30 segundos e um gancho inicial (hook) de 3 segundos para Reels/TikTok, com foco em parar o feed."
+        output_schema['properties']['gancho_video'] = {"type": "STRING", "description": "Um HOOK (gancho) de 3 segundos que interrompe a rolagem do feed."}
         output_schema['properties']['roteiro_basico'] = {"type": "STRING", "description": "Um roteiro conciso de 30 segundos em 3 etapas (Problema, Solução/Benefício, CTA)."}
         output_schema['propertyOrdering'].extend(['gancho_video', 'roteiro_basico'])
+        
+        # NOVO RECURSO: SUGESTÕES DE CAMPANHA
+        system_instruction += "\n\n⚠️ INSTRUÇÃO PREMIUM: Gere também uma sugestão de 3 títulos de campanhas para teste A/B no Meta Ads."
+        output_schema['properties']['sugestao_campanhas'] = {"type": "STRING", "description": "3 títulos de campanhas agressivas para teste A/B."}
+        output_schema['propertyOrdering'].extend(['sugestao_campanhas'])
 
 
     # 2. CONSTRUÇÃO DO PAYLOAD
@@ -248,46 +293,89 @@ def call_gemini_api(user_description: str, product_type: str, tone: str, is_pro_
 # ----------------------------------------------------
 
 def display_upgrade_page(user_id: str):
-    """Exibe a página de vendas/upgrade quando o limite é atingido."""
+    """Exibe a página de vendas/upgrade com 3 planos."""
     st.markdown("---")
-    st.subheader("🚀 Destrave o Poder Total da AnuncIA!")
-    st.warning("🚨 **Limite Gratuito Atingido!** Você utilizou 3 de 3 anúncios grátis.")
+    st.subheader("🚀 Escolha seu Plano e Venda Mais!")
+    st.warning("🚨 **Limite Gratuito Atingido!** Para continuar, selecione um plano.")
     
-    st.markdown("Chegou a hora de levar sua copy e seus resultados para o próximo nível.")
+    st.markdown("Invista em copy de alta conversão para dominar o mercado.")
     
-    col1, col2 = st.columns(2)
+    # Layout de 3 colunas para os planos (Melhoria de UI)
+    col1, col2, col3 = st.columns(3)
     
+    # Plano 1: Gratuito (Referência)
     with col1:
         st.markdown(
             f"""
-            <div style="background-color: #f0f0f0; padding: 20px; border-radius: 12px; height: 100%; border: 1px solid #ddd;">
-                <h4 style="color: #666;">Plano Gratuito</h4>
-                <p><strong>R$ 0,00</strong></p>
-                <ul style="list-style-type: '❌ '; padding-left: 20px;">
+            <div class="plan-card" style="background-color: #f7f7f7; border: 1px solid #ddd;">
+                <h4 style="color: #666; text-align: center;">Plano Grátis</h4>
+                <div style="text-align: center;">
+                    <p class="price-tag" style="color: #666;">R$ 0,00</p>
+                    <p>por mês</p>
+                </div>
+                <ul style="list-style-type: '❌ '; padding-left: 20px; font-size: 0.95em;">
                     <li>Apenas {FREE_LIMIT} Anúncios/Sessão</li>
-                    <li>Sem Roteiros de Vídeo (Reels/TikTok)</li>
-                    <li>Uso Básico</li>
+                    <li>Uso Básico (AIDA)</li>
+                    <li><span style="color: #999;">Roteiros de Vídeo (Reels/TikTok)</span></li>
+                    <li><span style="color: #999;">Sugestões de Campanhas A/B</span></li>
                 </ul>
+                <div style="text-align: center; margin-top: 15px;">
+                    <button style="background-color: #ccc; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold;" disabled>
+                        SELECIONADO
+                    </button>
+                </div>
             </div>
             """, unsafe_allow_html=True
         )
     
+    # Plano 2: Essencial (Ancora de preço / Gateway)
     with col2:
         st.markdown(
             f"""
-            <div style="background-color: #e0f2ff; padding: 20px; border-radius: 12px; height: 100%; border: 2px solid #52b2ff;">
-                <h4 style="color: #52b2ff;">Plano PRO 💎</h4>
-                <p><strong>R$ 19,90/mês</strong></p>
-                <ul style="list-style-type: '✅ '; padding-left: 20px;">
+            <div class="plan-card" style="background-color: #e0f2ff; border: 2px solid #52b2ff;">
+                <h4 style="color: #52b2ff; text-align: center;">Plano Essencial</h4>
+                 <div style="text-align: center;">
+                    <p class="price-tag" style="color: #52b2ff;">R$ 19,90</p>
+                    <p>por mês</p>
+                </div>
+                <ul style="list-style-type: '✅ '; padding-left: 20px; font-size: 0.95em;">
                     <li>Anúncios Ilimitados (Sem Restrições)</li>
-                    <li>Geração de **Roteiros de Vídeo** (PRO Feature)</li>
-                    <li>Todos os Tons de Voz</li>
-                    <li>Suporte Prioritário</li>
+                    <li>Uso Completo (AIDA e Segmentação)</li>
+                    <li><span style="color: #999;">Roteiros de Vídeo (Reels/TikTok)</span></li>
+                    <li><span style="color: #999;">Sugestões de Campanhas A/B</span></li>
                 </ul>
                 <div style="text-align: center; margin-top: 15px;" class="pro-button">
-                    <a href="LINK_PARA_PAGAMENTO" target="_blank" style="text-decoration: none;">
+                    <a href="LINK_PARA_PAGAMENTO_ESSENCIAL" target="_blank" style="text-decoration: none;">
                         <button>
-                            ATIVAR AGORA →
+                            ASSINAR AGORA →
+                        </button>
+                    </a>
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    # Plano 3: Premium (Melhor Oferta e Destaque)
+    with col3:
+        st.markdown(
+            f"""
+            <div class="plan-card plan-highlight">
+                <h4 style="color: #ff4b4b; text-align: center;">🏆 Plano Premium</h4>
+                 <div style="text-align: center;">
+                    <p class="strike-through">De R$ 49,90</p>
+                    <p class="price-tag" style="color: #ff4b4b;">R$ 34,90</p>
+                    <p>por mês **(Mais Vantajoso)**</p>
+                </div>
+                <ul style="list-style-type: '✅ '; padding-left: 20px; font-size: 0.95em;">
+                    <li>Anúncios Ilimitados (Sem Restrições)</li>
+                    <li>Uso Completo (AIDA e Segmentação)</li>
+                    <li>Geração de **Roteiros de Vídeo**</li>
+                    <li>Sugestões de **Campanhas A/B** (Exclusivo!)</li>
+                </ul>
+                <div style="text-align: center; margin-top: 15px;" class="pro-button">
+                    <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank" style="text-decoration: none;">
+                        <button style="background-color: #ff4b4b !important;">
+                            EU QUERO O PREMIUM!
                         </button>
                     </a>
                 </div>
@@ -296,9 +384,9 @@ def display_upgrade_page(user_id: str):
         )
     
     st.markdown(f"---")
-    st.info(f"Seu ID de acesso é: **{user_id}**") # Mostra o ID limpo (Document ID)
+    st.info(f"Seu ID de acesso é: **{user_id}**")
 
-# FUNÇÃO ATUALIZADA COM ÍCONE
+
 def display_result_box(icon: str, title: str, content: str, key: str):
     """Exibe o conteúdo em um text_area com botão de cópia nativo e ícone."""
     st.markdown(f"**{icon} {title}**")
@@ -345,31 +433,41 @@ else:
     user_id = st.session_state['logged_in_user_id']
     user_data = get_user_data(user_id)
     ads_used = user_data.get("ads_generated", 0)
-    user_plan = user_data.get("plan", "free")
+    user_plan_tier = user_data.get("plan_tier", "free") # Usando o novo campo
     
-    is_pro_user = (user_plan == "pro")
+    # Mapeamento do tier para exibição
+    tier_display_map = {
+        "free": "Plano Grátis",
+        "essential": "Plano Essencial",
+        "premium": "Plano Premium"
+    }
+    
+    is_premium = (user_plan_tier == "premium")
+    is_essential_or_better = (user_plan_tier in ["essential", "premium"])
 
     st.markdown("---")
-    if is_pro_user:
-        if user_id.lower() == clean_email_to_doc_id(DEVELOPER_EMAIL):
-             status_text = "⭐ Acesso de Desenvolvedor (PRO Ilimitado)"
-        else:
-             status_text = "💎 Plano PRO (Uso Ilimitado)"
-        st.markdown(f"**Status:** {status_text}")
+    if user_id.lower() == clean_email_to_doc_id(DEVELOPER_EMAIL):
+        status_text = "⭐ Acesso de Desenvolvedor (PREMIUM Ilimitado)"
     else:
-        st.markdown(f"**Status:** Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+        status_text = f"Nível de Acesso: **{tier_display_map.get(user_plan_tier, 'Plano Grátis')}**"
+    
+    if user_plan_tier == "free":
+        st.markdown(f"**Status:** {status_text}. Você usou **{ads_used}** de **{FREE_LIMIT}** anúncios grátis.")
+    else:
+        st.markdown(f"**Status:** {status_text} (Uso Ilimitado) 🎉")
+        
     st.markdown("---")
 
     # Botão de Upgrade na Sidebar
     with st.sidebar:
-        if not is_pro_user and ads_used > 0:
+        if user_plan_tier == "free" or user_plan_tier == "essential":
             st.markdown("---")
-            st.markdown("#### Quer Ilimitado? 🚀")
+            st.markdown("#### 🚀 Quer o Plano Premium?")
             st.markdown("""
             <div style="text-align: center;" class="pro-button">
-                <a href="LINK_PARA_PAGAMENTO" target="_blank">
-                    <button>
-                        UPGRADE AGORA
+                <a href="LINK_PARA_PAGAMENTO_PREMIUM" target="_blank">
+                    <button style="background-color: #ff4b4b !important;">
+                        UPGRADE (Economize!)
                     </button>
                 </a>
             </div>
@@ -377,7 +475,7 @@ else:
             st.markdown("---")
         
 
-    if not is_pro_user and ads_used >= FREE_LIMIT:
+    if user_plan_tier == "free" and ads_used >= FREE_LIMIT:
         display_upgrade_page(user_id)
         
     else:
@@ -408,10 +506,11 @@ else:
                         ["Vendedor e Agressivo", "Divertido e Informal", "Profissional e Formal", "Inspirador e Motivacional"]
                     )
 
+            # Recurso exclusivo do PREMIUM
             needs_video = st.checkbox(
-                "🚀 Gerar Roteiro de Vídeo (Reels/TikTok) - Exclusivo Plano PRO", 
+                "🎬 Gerar Roteiro de Vídeo (Reels/TikTok) e Sugestão de Campanhas - Exclusivo Plano Premium", 
                 value=False,
-                disabled=(not is_pro_user)
+                disabled=(not is_premium)
             )
             
             st.markdown("---")
@@ -421,15 +520,15 @@ else:
         if submitted:
             if not description:
                 st.error("Por favor, forneça uma descrição detalhada do produto para a IA.")
-            elif needs_video and not is_pro_user:
-                st.error("⚠️ **Recurso PRO:** A Geração de Roteiro de Vídeo é exclusiva do Plano PRO. Por favor, desmarque a opção ou faça o upgrade.")
+            elif needs_video and not is_premium:
+                st.error("⚠️ **Recurso Premium:** A Geração de Roteiro de Vídeo e Campanhas é exclusiva do Plano Premium.")
             elif not GEMINI_KEY:
                 st.error("⚠️ Erro de Configuração: A chave de API (GEMINI_API_KEY) não está definida no secrets.toml.")
                 
                 # SIMULAÇÃO DE RESULTADO
                 st.warning("Gerando Resultado Simulado para Teste de UI/Contagem. Se a chave estivesse OK, o resultado real apareceria abaixo.")
                 
-                new_count = increment_ads_count(user_id, user_plan)
+                new_count = increment_ads_count(user_id, user_plan_tier)
                 
                 st.success(f"✅ Teste de UI/Contagem Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
                 
@@ -443,9 +542,10 @@ else:
                     "segmentacao_e_ideias": "1. Pessoas com medo de investir. 2. Aposentados buscando renda extra. 3. Estudantes de economia desiludidos com a teoria."
                 }
                 
-                if is_pro_user and needs_video:
+                if is_premium and needs_video:
                     sim_result['gancho_video'] = "Pare de perder tempo com vídeos longos!"
-                    sim_result['roteiro_basico'] = "Problema (0-5s): Mostra uma tela de gráfico confusa. 'Investir parece complicado, né?'. Solução/Benefício (6-20s): Transição para a tela do curso, mostrando uma interface simples. 'Com nosso método, você aprende o básico em 1 hora e aplica amanhã!'. CTA (21-30s): Link na bio. 'Inscreva-se hoje e ganhe seu primeiro guia de investimentos grátis!'"
+                    sim_result['roteiro_basico'] = "Problema (0-5s): Mostra uma tela de gráfico confusa. 'Investir parece complicado, né?'. Solução/Benefício (6-20s): Transição para a tela do curso, mostrando uma interface simples. 'Com nosso método, você aprende o básico em 1 hora e aplica amanhã!'. CTA (21-30s): Link na bio. 'Inscreva-se hoje e ganhe seu primeiro guia de investimentos grátis!'."
+                    sim_result['sugestao_campanhas'] = "Campanha 1: 'Pare de Perder Dinheiro na Poupança (Método Secreto)'. Campanha 2: 'O Fim da Confusão de Investimentos'. Campanha 3: 'Aprenda a Investir Sem Ser Um Gênio da Matemática'."
 
                 
                 display_result_box("🎯", "Título Gancho (Atenção)", sim_result["titulo_gancho"], "title_sim_box")
@@ -453,25 +553,30 @@ else:
                 display_result_box("📢", "Chamada para Ação (CTA)", sim_result["chamada_para_acao"], "cta_sim_box")
                 display_result_box("💡", "Ideias de Segmentação", sim_result["segmentacao_e_ideias"], "seg_sim_box")
                 
-                if is_pro_user and needs_video:
+                if is_premium and needs_video:
                     st.markdown("---")
-                    st.subheader("💎 Conteúdo PRO: Roteiro de Vídeo (SIMULADO)")
-                    with st.container(border=True): # Destaque visual PRO
-                        with st.expander("Clique para ver o Roteiro Completo"):
+                    st.subheader("💎 Conteúdo Premium: Estratégia de Vídeo e Campanhas (SIMULADO)")
+                    with st.container(border=True): # Destaque visual PREMIUM
+                        # ROTEIRO DE VÍDEO
+                        with st.expander("🎬 Roteiro de Vídeo (Reels/TikTok)"):
                             display_result_box("🎬", "Gancho (Hook) de 3 Segundos", sim_result["gancho_video"], "hook_sim_box")
                             display_result_box("🎞️", "Roteiro Completo (30s)", sim_result["roteiro_basico"], "roteiro_sim_box")
+                        
+                        # SUGESTÃO DE CAMPANHAS
+                        with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
+                             display_result_box("📈", "Títulos de Campanhas", sim_result["sugestao_campanhas"], "camp_sim_box")
                 
             else:
                 # 1. Chamada REAL à API
                 with st.spinner("🧠 A IA está gerando sua estratégia e copy..."):
-                    api_result = call_gemini_api(description, product_type, tone, is_pro_user, needs_video)
+                    api_result = call_gemini_api(description, product_type, tone, user_plan_tier, needs_video)
                     
                     if "error" in api_result:
                         st.error(f"❌ Erro na Geração da Copy: {api_result['error']}")
                         st.info("A contagem de uso **NÃO** foi debitada. Tente novamente.")
                     else:
                         # 2. Incrementa a contagem no Firebase/Simulação
-                        new_count = increment_ads_count(user_id, user_plan)
+                        new_count = increment_ads_count(user_id, user_plan_tier)
                         
                         # 3. Exibição do resultado
                         st.success(f"✅ Copy Gerada com Sucesso! (Grátis restante: {max(0, FREE_LIMIT - new_count)})")
@@ -492,17 +597,19 @@ else:
                         display_result_box("💡", "Ideias de Segmentação", api_result.get("segmentacao_e_ideias", "N/A"), "seg_box")
                         
                         
-                        # ROTEIRO DE VÍDEO (EXCLUSIVO PRO)
-                        if is_pro_user and needs_video:
+                        # ROTEIRO DE VÍDEO E CAMPANHAS (EXCLUSIVO PREMIUM)
+                        if is_premium and needs_video:
                             st.markdown("---")
-                            st.subheader("💎 Conteúdo PRO: Roteiro de Vídeo (Reels/TikTok)")
-                            with st.container(border=True): # Destaque visual PRO
-                                with st.expander("Clique para ver o Roteiro Completo"):
-                                    # GANCHO VÍDEO
+                            st.subheader("💎 Conteúdo Premium: Estratégia de Vídeo e Campanhas")
+                            with st.container(border=True): # Destaque visual PREMIUM
+                                # ROTEIRO DE VÍDEO
+                                with st.expander("🎬 Roteiro de Vídeo (Reels/TikTok)"):
                                     display_result_box("🎬", "Gancho (Hook) de 3 Segundos", api_result.get("gancho_video", "N/A"), "hook_box")
-                                    
-                                    # ROTEIRO BÁSICO
                                     display_result_box("🎞️", "Roteiro Completo (30s)", api_result.get("roteiro_basico", "N/A"), "roteiro_box")
+                                
+                                # SUGESTÃO DE CAMPANHAS
+                                with st.expander("📈 Sugestões de Campanhas A/B (Meta Ads)"):
+                                    display_result_box("📈", "Títulos de Campanhas", api_result.get("sugestao_campanhas", "N/A"), "camp_box")
 
 
 # ----------------------------------------------------
